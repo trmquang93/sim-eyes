@@ -1,0 +1,16 @@
+{
+  "name": "sim-eyes",
+  "version": "1.0.0",
+  "type": "module",
+  "bin": {
+    "sim-eyes": "./server.mjs"
+  },
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@typesafe-ai/sdk": "^0.6.0",
+    "zod": "^3.24.2"
+  }
+}
