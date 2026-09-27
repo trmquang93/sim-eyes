@@ -215,8 +215,7 @@ async function releaseBinding({ closeSession = true } = {}) {
           current.session,
           "--platform",
           "ios",
-          "--device",
-          current.udid,
+          ...deviceSelectArgs(current.udid),
         ],
         { timeoutMs: 60000 }
       ).catch(() => {});
@@ -225,6 +224,19 @@ async function releaseBinding({ closeSession = true } = {}) {
   } finally {
     releasing = false;
   }
+}
+
+function isUdid(value) {
+  return /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/.test(
+    value
+  );
+}
+
+/** agent-device: `--udid` for UUIDs, `--device` for display names. */
+function deviceSelectArgs(udidOrName) {
+  return isUdid(udidOrName)
+    ? ["--udid", udidOrName]
+    : ["--device", udidOrName];
 }
 
 async function runAd(args, opts) {
@@ -236,8 +248,7 @@ async function runAd(args, opts) {
       b.session,
       "--platform",
       "ios",
-      "--device",
-      b.udid,
+      ...deviceSelectArgs(b.udid),
     ],
     opts
   );
