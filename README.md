@@ -2,6 +2,23 @@
 
 Cursor MCP for an iOS simulator. Each call returns the next screenshot.
 
+## Multi-agent (required on a shared Mac)
+
+**Problem:** Every Cursor chat used to hardcode session `sim-eyes` + device `iPhone 17`, so agents stomped each other.
+
+**Fix (v1.1):** Each MCP process gets a unique `agent-device` session (`sim-eyes-<pid>-<hex>`) and leases a simulator through [sim-pool](https://github.com/trmquang93) (`~/.claude/skills/sim-pool`).
+
+| Tool | Purpose |
+| --- | --- |
+| `acquire` | Lease an exclusive UDID (optional `prefer_udid` / `prefer_device`) |
+| `release` | Free the lease + close the session when QA ends |
+| `status` | This process binding + host pool table |
+| `look` / `open` / … | Auto-acquire on first use if you forgot `acquire` |
+
+If the pool is busy → tool returns `SIM_POOL_BUSY` → mark QA **inconclusive**. Do not steal another lease.
+
+Also install/use the **sim-pool** skill. Set `SIM_POOL_BIN` if it is not under `~/.claude/skills/sim-pool/scripts/sim-pool`.
+
 | Tool | Arguments |
 | --- | --- |
 | `look` | none |
@@ -23,7 +40,6 @@ Requires [agent-device](https://www.npmjs.com/package/agent-device) (`npx` is us
       "command": "node",
       "args": ["/absolute/path/to/sim-eyes/server.mjs"],
       "env": {
-        "SIM_EYES_DEVICE": "iPhone 17",
         "TYPESAFE_API_KEY": "${TYPESAFE_API_KEY}"
       }
     }
@@ -31,4 +47,16 @@ Requires [agent-device](https://www.npmjs.com/package/agent-device) (`npx` is us
 }
 ```
 
-`SIM_EYES_BOOT_DEVICE` is the simulator name to boot when none is running. It defaults to `iPhone 17`.
+### Env
+
+| Variable | Meaning |
+| --- | --- |
+| `SIM_EYES_PREFER_UDID` / `DEVICE_ID` | Prefer this UDID when acquiring (still exclusive via pool) |
+| `SIM_EYES_PREFER_DEVICE` | Prefer this simulator **name** (resolved to UDID) |
+| `SIM_EYES_DEVICE` | Deprecated alias of `SIM_EYES_PREFER_DEVICE` — do **not** pin every agent to the same name |
+| `SIM_EYES_USE_POOL=0` | Disable pool (unique session only; still unsafe for parallel agents) |
+| `SIM_POOL_BIN` | Path to `sim-pool` CLI |
+| `SIM_EYES_BOOT_DEVICE` | Name to boot when none running and pool is off (default `iPhone 17`) |
+| `SIM_EYES_PROJECT` / `SIM_EYES_WORKTREE` | Metadata recorded on the lease |
+
+Leases renew on every tool call; TTL + dead MCP pid recover orphans via sim-pool GC.

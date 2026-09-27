@@ -1,10 +1,18 @@
 #!/usr/bin/env node
+/**
+ * sim-eyes MCP — one Cursor agent ↔ one leased simulator.
+ *
+ * Multi-agent safety:
+ * - Unique agent-device session per MCP process (`sim-eyes-<pid>-<hex>`)
+ * - Simulator leased via sim-pool (never hardcode a shared device name)
+ * - Renew on every tool call; release on process exit
+ * - Per-session screenshot work dir
+ */
 import { spawn } from "node:child_process";
-import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -12,9 +20,18 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { resolveLabel } from "./resolve-label.mjs";
+import {
+  PoolBusyError,
+  acquireLease,
+  defaultInstanceId,
+  findSimPoolBin,
+  poolStatusText,
+  releaseLease,
+  renewLease,
+} from "./pool.mjs";
 
-const SESSION = "sim-eyes";
-const WORK = join(homedir(), ".local", "sim-eyes", "work");
+const INSTANCE_ID = process.env.SIM_EYES_INSTANCE_ID || defaultInstanceId();
+const WORK_ROOT = join(homedir(), ".local", "sim-eyes", "work");
 const TAP_TYPES = new Set([
   "Button",
   "Cell",
@@ -27,8 +44,17 @@ const TAP_TYPES = new Set([
   "SecureTextField",
 ]);
 
+/** @type {{ leaseId: string, udid: string, name: string, expiresAt: string, session: string } | null} */
+let binding = null;
 let recordingPath = null;
 let screenSize = { width: 402, height: 874 };
+let appReady = false;
+let releasing = false;
+
+function workDir() {
+  const session = binding?.session ?? `sim-eyes-${INSTANCE_ID}`;
+  return join(WORK_ROOT, session);
+}
 
 function adCommand() {
   if (process.env.SIM_EYES_AD) return process.env.SIM_EYES_AD.split(" ");
@@ -73,17 +99,145 @@ function spawnAd(argv, { json = false, timeoutMs = 120000 } = {}) {
   });
 }
 
+function usePool() {
+  if (process.env.SIM_EYES_USE_POOL === "0") return false;
+  return !!findSimPoolBin();
+}
+
+async function acquireBinding({ preferUdid, preferDevice } = {}) {
+  if (binding) {
+    await renewLease(binding.leaseId).catch(() => {});
+    return binding;
+  }
+
+  const prefer =
+    preferUdid ||
+    process.env.SIM_EYES_PREFER_UDID ||
+    process.env.DEVICE_ID ||
+    undefined;
+  const preferName =
+    preferDevice ||
+    process.env.SIM_EYES_PREFER_DEVICE ||
+    process.env.SIM_EYES_DEVICE ||
+    undefined;
+
+  if (usePool()) {
+    // Resolve preferred name → udid when only a name is set.
+    let udid = prefer;
+    if (!udid && preferName) {
+      udid = await resolveDeviceNameToUdid(preferName);
+    }
+    binding = await acquireLease({
+      instanceId: INSTANCE_ID,
+      preferUdid: udid,
+      preferDevice: preferName,
+      project: process.env.SIM_EYES_PROJECT || "sim-eyes",
+      worktree: process.env.SIM_EYES_WORKTREE || process.cwd(),
+      ttl: process.env.SIM_EYES_LEASE_TTL
+        ? Number(process.env.SIM_EYES_LEASE_TTL)
+        : undefined,
+    });
+  } else {
+    // Single-agent fallback: unique session, but still may share a physical sim.
+    const device = prefer || preferName || (await pickAnyBootedDevice());
+    binding = {
+      leaseId: "",
+      udid: device,
+      name: device,
+      expiresAt: "",
+      session: `sim-eyes-${INSTANCE_ID}`,
+    };
+  }
+  await mkdir(workDir(), { recursive: true });
+  return binding;
+}
+
+async function resolveDeviceNameToUdid(nameOrId) {
+  try {
+    const out = await spawnAd(["devices"], { json: true, timeoutMs: 30000 });
+    const data = JSON.parse(out);
+    const sims = (data.data?.devices ?? []).filter(
+      (d) => d.platform === "ios" && d.kind === "simulator"
+    );
+    const hit =
+      sims.find((d) => d.id === nameOrId) ||
+      sims.find((d) => d.name === nameOrId);
+    return hit?.id ?? nameOrId;
+  } catch {
+    return nameOrId;
+  }
+}
+
+async function pickAnyBootedDevice() {
+  const out = await spawnAd(["devices"], { json: true, timeoutMs: 30000 });
+  const data = JSON.parse(out);
+  const sims = (data.data?.devices ?? []).filter(
+    (d) => d.platform === "ios" && d.kind === "simulator" && d.booted
+  );
+  if (sims.length === 0) {
+    const name = process.env.SIM_EYES_BOOT_DEVICE ?? "iPhone 17";
+    await spawnAd(["boot", "--platform", "ios", "--device", name], {
+      timeoutMs: 180000,
+    });
+    return name;
+  }
+  const free = sims.find((d) => !d.claimedBy);
+  return (free ?? sims[0]).id;
+}
+
+async function ensureBound() {
+  if (!binding) await acquireBinding();
+  else if (binding.leaseId) {
+    try {
+      await renewLease(binding.leaseId);
+    } catch (err) {
+      binding = null;
+      throw new Error(
+        `Lease lost (${err.message}). Call acquire again or mark QA inconclusive.`
+      );
+    }
+  }
+  return binding;
+}
+
+async function releaseBinding({ closeSession = true } = {}) {
+  if (releasing || !binding) return;
+  releasing = true;
+  const current = binding;
+  binding = null;
+  appReady = false;
+  try {
+    if (closeSession) {
+      await spawnAd(
+        [
+          "close",
+          "--session",
+          current.session,
+          "--platform",
+          "ios",
+          "--device",
+          current.udid,
+        ],
+        { timeoutMs: 60000 }
+      ).catch(() => {});
+    }
+    if (current.leaseId) await releaseLease(current.leaseId);
+  } finally {
+    releasing = false;
+  }
+}
+
 async function runAd(args, opts) {
-  const device = await resolveDevice();
+  const b = await ensureBound();
   return spawnAd(
     [
       ...args,
       "--session",
-      SESSION,
+      b.session,
       "--platform",
       "ios",
       "--device",
-      device,
+      b.udid,
     ],
     opts
   );
@@ -92,38 +246,6 @@ async function runAd(args, opts) {
 async function runAdJson(args, opts) {
   const out = await runAd(args, { ...opts, json: true });
   return JSON.parse(out);
-}
-
-let cachedDevice = null;
-
-async function resolveDevice() {
-  if (cachedDevice) return cachedDevice;
-  if (process.env.SIM_EYES_DEVICE) {
-    cachedDevice = process.env.SIM_EYES_DEVICE;
-    return cachedDevice;
-  }
-  const out = await spawnAd(["devices"], { json: true, timeoutMs: 30000 });
-  const data = JSON.parse(out);
-  const sims = (data.data?.devices ?? []).filter(
-    (d) => d.platform === "ios" && d.kind === "simulator" && d.booted
-  );
-  if (sims.length === 0) {
-    const name = process.env.SIM_EYES_BOOT_DEVICE ?? "iPhone 17";
-    await spawnAd(
-      ["boot", "--platform", "ios", "--device", name],
-      { timeoutMs: 180000 }
-    );
-    cachedDevice = name;
-    return cachedDevice;
-  }
-  const ours = sims.find((d) => d.claimedBy?.session === SESSION);
-  if (ours) {
-    cachedDevice = ours.name;
-    return cachedDevice;
-  }
-  const free = sims.find((d) => !d.claimedBy);
-  cachedDevice = (free ?? sims[0]).name;
-  return cachedDevice;
 }
 
 function center(rect) {
@@ -159,8 +281,6 @@ function listTargets(nodes) {
   return items;
 }
 
-let appReady = false;
-
 async function ensureApp() {
   if (appReady) return;
   await runAd(["open", "Settings", "--relaunch"], { timeoutMs: 180000 });
@@ -181,8 +301,9 @@ async function snapshotTargets() {
 }
 
 async function captureScreenshot(tag = "screen") {
-  await mkdir(WORK, { recursive: true });
-  const path = join(WORK, `${tag}-${Date.now()}.png`);
+  const dir = workDir();
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, `${tag}-${Date.now()}.png`);
   await runAd(["screenshot", path, "--pixel-density", "1"]);
   const buf = await readFile(path);
   return { path, base64: buf.toString("base64") };
@@ -195,11 +316,16 @@ function formatTargets(targets) {
     .join("\n");
 }
 
+function bindingBanner() {
+  if (!binding) return "";
+  return `[session ${binding.session} · ${binding.name} · ${binding.udid}]\n`;
+}
+
 async function lookPayload() {
   const targets = await snapshotTargets();
   const shot = await captureScreenshot("look");
   return {
-    text: formatTargets(targets),
+    text: bindingBanner() + formatTargets(targets),
     image: shot.base64,
     targets,
   };
@@ -272,8 +398,9 @@ function swipeCoords(direction) {
 }
 
 async function extractFrames(videoPath, maxFrames = 6) {
-  await mkdir(WORK, { recursive: true });
-  const outDir = join(WORK, `frames-${Date.now()}`);
+  const dir = workDir();
+  await mkdir(dir, { recursive: true });
+  const outDir = join(dir, `frames-${Date.now()}`);
   await mkdir(outDir, { recursive: true });
   const pattern = join(outDir, "frame-%03d.png");
   await execCmd(
@@ -319,17 +446,61 @@ function execCmd(cmd, args, timeoutMs = 60000) {
   });
 }
 
+function statusText() {
+  const lines = [
+    `instance: ${INSTANCE_ID}`,
+    `pool: ${usePool() ? findSimPoolBin() : "disabled/unavailable"}`,
+  ];
+  if (binding) {
+    lines.push(
+      `bound: yes`,
+      `session: ${binding.session}`,
+      `udid: ${binding.udid}`,
+      `name: ${binding.name}`,
+      `lease: ${binding.leaseId || "(none)"}`,
+      `expires: ${binding.expiresAt || "(n/a)"}`
+    );
+  } else {
+    lines.push(`bound: no (first look/open/tap will acquire)`);
+  }
+  return lines.join("\n");
+}
+
 const server = new Server(
-  { name: "sim-eyes", version: "1.0.0" },
+  { name: "sim-eyes", version: "1.1.0" },
   { capabilities: { tools: {} } }
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
+      name: "acquire",
+      description:
+        "Lease an exclusive simulator via sim-pool for this agent. Call before QA when multiple agents share a Mac. Optional prefer_udid / prefer_device.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          prefer_udid: { type: "string" },
+          prefer_device: { type: "string" },
+        },
+      },
+    },
+    {
+      name: "release",
+      description:
+        "Release this agent's simulator lease and close its agent-device session. Call when QA is done.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "status",
+      description:
+        "Show this MCP process binding and host sim-pool status (who holds which UDID).",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
       name: "look",
       description:
-        "Screenshot of the frontmost simulator app plus numbered tappable controls with point coordinates.",
+        "Screenshot of the frontmost simulator app plus numbered tappable controls with point coordinates. Auto-acquires a lease if needed.",
       inputSchema: { type: "object", properties: {} },
     },
     {
@@ -415,6 +586,34 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
   try {
+    if (name === "status") {
+      const pool = await poolStatusText();
+      return toolResult(`${statusText()}\n\n--- sim-pool ---\n${pool}`);
+    }
+
+    if (name === "acquire") {
+      if (binding) {
+        await renewLease(binding.leaseId).catch(() => {});
+        return toolResult(
+          `Already bound.\n${statusText()}\n\nReuse this session until release.`
+        );
+      }
+      await acquireBinding({
+        preferUdid: args?.prefer_udid,
+        preferDevice: args?.prefer_device,
+      });
+      return toolResult(
+        `Acquired exclusive simulator for this agent.\n${statusText()}\n\nOther agents must acquire a different UDID (or wait if the pool is busy).`
+      );
+    }
+
+    if (name === "release") {
+      if (!binding) return toolResult("Nothing to release (not bound).");
+      const before = statusText();
+      await releaseBinding();
+      return toolResult(`Released.\nWas:\n${before}`);
+    }
+
     if (name === "look") {
       const payload = await lookPayload();
       return toolResult(payload.text, payload.image);
@@ -424,7 +623,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       await runAd(["open", args.name, "--relaunch"], { timeoutMs: 180000 });
       appReady = true;
       const payload = await lookPayload();
-      return toolResult(`Opened ${args.name}\n\n${payload.text}`, payload.image);
+      return toolResult(
+        `${bindingBanner()}Opened ${args.name}\n\n${payload.text}`,
+        payload.image
+      );
     }
 
     if (name === "tap") {
@@ -452,13 +654,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "swipe") {
       const [x1, y1, x2, y2] = swipeCoords(args.direction);
-      await runAd([
-        "swipe",
-        String(x1),
-        String(y1),
-        String(x2),
-        String(y2),
-      ]);
+      await runAd(["swipe", String(x1), String(y1), String(x2), String(y2)]);
       const payload = await afterMutation();
       return toolResult(
         `Swiped ${args.direction}\n\n${payload.text}`,
@@ -496,11 +692,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === "record") {
       if (args.action === "start") {
-        await mkdir(WORK, { recursive: true });
+        const dir = workDir();
+        await mkdir(dir, { recursive: true });
         if (recordingPath) {
           return toolResult(`Recording already running.\n${recordingPath}`);
         }
-        recordingPath = join(WORK, `clip-${Date.now()}.mp4`);
+        recordingPath = join(dir, `clip-${Date.now()}.mp4`);
         try {
           await runAd([
             "record",
@@ -558,8 +755,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     throw new Error(`Unknown tool: ${name}`);
   } catch (err) {
+    const busy =
+      err instanceof PoolBusyError || err?.code === "SIM_POOL_BUSY";
+    const text = busy
+      ? `SIM_POOL_BUSY: ${err.message}\nReport QA inconclusive — do not steal another agent's simulator.`
+      : `Error: ${err.message}`;
     return {
-      content: [{ type: "text", text: `Error: ${err.message}` }],
+      content: [{ type: "text", text }],
       isError: true,
     };
   }
@@ -574,8 +776,20 @@ function toolResult(text, images) {
   return { content };
 }
 
+function installExitHooks() {
+  const cleanup = () => {
+    releaseBinding().finally(() => process.exit(0));
+  };
+  process.on("SIGINT", cleanup);
+  process.on("SIGTERM", cleanup);
+  process.on("beforeExit", () => {
+    if (binding) releaseBinding({ closeSession: true }).catch(() => {});
+  });
+}
+
 async function main() {
-  await mkdir(WORK, { recursive: true });
+  await mkdir(WORK_ROOT, { recursive: true });
+  installExitHooks();
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

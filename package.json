@@ -1,12 +1,13 @@
 {
   "name": "sim-eyes",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "bin": {
     "sim-eyes": "./server.mjs"
   },
   "scripts": {
-    "start": "node server.mjs"
+    "start": "node server.mjs",
+    "test": "node test-pool.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
