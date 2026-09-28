@@ -9,10 +9,10 @@
  * - Per-session screenshot work dir
  */
 import { spawn } from "node:child_process";
-import { mkdir, readFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -20,6 +20,14 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { resolveLabel } from "./resolve-label.mjs";
+import {
+  ambiguousLabelNote,
+  exactLabelMatches,
+  formatTargets,
+  keyboardDeleteTarget,
+  listTargets,
+  targetByIndex,
+} from "./targets.mjs";
 import {
   PoolBusyError,
   acquireLease,
@@ -32,20 +40,10 @@ import {
 
 const INSTANCE_ID = process.env.SIM_EYES_INSTANCE_ID || defaultInstanceId();
 const WORK_ROOT = join(homedir(), ".local", "sim-eyes", "work");
-const TAP_TYPES = new Set([
-  "Button",
-  "Cell",
-  "Switch",
-  "Tab",
-  "Link",
-  "MenuItem",
-  "SearchField",
-  "TextField",
-  "SecureTextField",
-]);
-
 /** @type {{ leaseId: string, udid: string, name: string, expiresAt: string, session: string } | null} */
 let binding = null;
+/** Controls from the last snapshot. `index` on tap/type refers to this list. */
+let lastTargets = [];
 let recordingPath = null;
 let screenSize = { width: 402, height: 874 };
 let appReady = false;
@@ -259,39 +257,6 @@ async function runAdJson(args, opts) {
   return JSON.parse(out);
 }
 
-function center(rect) {
-  return {
-    x: Math.round(rect.x + rect.width / 2),
-    y: Math.round(rect.y + rect.height / 2),
-  };
-}
-
-function listTargets(nodes) {
-  const items = [];
-  let n = 0;
-  for (const node of nodes) {
-    if (!node.enabled) continue;
-    if (!node.rect || node.rect.width < 8 || node.rect.height < 8) continue;
-    const isField =
-      node.type?.includes("TextField") ||
-      node.type === "SearchField" ||
-      node.editable;
-    const isTap =
-      TAP_TYPES.has(node.type) ||
-      node.type?.includes("Button") ||
-      node.type === "Cell" ||
-      isField;
-    if (!isTap) continue;
-    const label = (node.label || node.identifier || node.type || "item")
-      .split("\n")[0]
-      .slice(0, 60);
-    const c = center(node.rect);
-    n += 1;
-    items.push({ n, label, x: c.x, y: c.y, editable: !!isField });
-  }
-  return items;
-}
-
 async function ensureApp() {
   if (appReady) return;
   await runAd(["open", "Settings", "--relaunch"], { timeoutMs: 180000 });
@@ -308,7 +273,9 @@ async function snapshotTargets() {
       height: nodes[0].rect.height,
     };
   }
-  return listTargets(nodes);
+  const targets = listTargets(nodes);
+  lastTargets = targets;
+  return targets;
 }
 
 async function captureScreenshot(tag = "screen") {
@@ -318,13 +285,6 @@ async function captureScreenshot(tag = "screen") {
   await runAd(["screenshot", path, "--pixel-density", "1"]);
   const buf = await readFile(path);
   return { path, base64: buf.toString("base64") };
-}
-
-function formatTargets(targets) {
-  if (targets.length === 0) return "No tappable controls found.";
-  return targets
-    .map((t) => `${t.n}. ${t.label} (${t.x}, ${t.y})`)
-    .join("\n");
 }
 
 function bindingBanner() {
@@ -339,49 +299,157 @@ async function lookPayload() {
     text: bindingBanner() + formatTargets(targets),
     image: shot.base64,
     targets,
+    shotPath: shot.path,
   };
+}
+
+async function saveShot(shotPath, save) {
+  if (!save) return "";
+  const dest = isAbsolute(save) ? save : join(process.cwd(), save);
+  await mkdir(dirname(dest), { recursive: true });
+  await copyFile(shotPath, dest);
+  return `\nSaved ${dest}`;
+}
+
+async function respond(text, payload, save) {
+  const note = await saveShot(payload.shotPath, save);
+  return toolResult(text + note, payload.image);
 }
 
 async function afterMutation() {
   return lookPayload();
 }
 
-async function pressExactLabel(label) {
-  const escaped = String(label).replace(/"/g, '\\"');
-  try {
-    await runAd(["press", `label="${escaped}"`, "--settle"]);
-    return true;
-  } catch {
-    return false;
+async function pressPoint(target) {
+  await runAd([
+    "press",
+    String(target.x),
+    String(target.y),
+    "--settle",
+  ]);
+}
+
+function requireIndex(index) {
+  const target = targetByIndex(lastTargets, index);
+  if (!target) {
+    const list = formatTargets(lastTargets);
+    throw new Error(
+      `No control #${index} in the last look. Pass a number from that list.\n\n${list}`
+    );
   }
+  return target;
 }
 
 async function tapByLabel(label) {
-  if (await pressExactLabel(label)) {
-    return { skipped: false, note: null };
+  const targets = await snapshotTargets();
+  const exact = exactLabelMatches(targets, label);
+  if (exact.length > 1) {
+    return { skipped: true, note: ambiguousLabelNote(label, exact) };
+  }
+  if (exact.length === 1) {
+    await pressPoint(exact[0]);
+    return { skipped: false, note: `Tapped #${exact[0].n} ${exact[0].label}` };
   }
 
-  const targets = await snapshotTargets();
   const resolved = await resolveLabel(label, targets);
   if (!resolved.target) {
     const list = formatTargets(targets);
     const hint = process.env.TYPESAFE_API_KEY
       ? "Could not match that label."
-      : "Could not match that label. Set TYPESAFE_API_KEY for fuzzy matching.";
+      : "Could not match that label. Set TYPESAFE_API_KEY for fuzzy matching, or pass index.";
     return { note: `${hint}\n\n${list}`, skipped: true };
   }
 
-  await runAd([
-    "press",
-    String(resolved.target.x),
-    String(resolved.target.y),
-    "--settle",
-  ]);
+  await pressPoint(resolved.target);
   const via = resolved.typesafeUsed ? " (TypeSafe)" : "";
   return {
     skipped: false,
-    note: `Tapped ${resolved.target.label}${via}`,
+    note: `Tapped #${resolved.target.n} ${resolved.target.label}${via}`,
   };
+}
+
+async function fillField(target, text) {
+  await runAd([
+    "fill",
+    String(target.x),
+    String(target.y),
+    String(text),
+    "--settle",
+  ]);
+}
+
+async function typeText(args) {
+  const text = String(args.text ?? "");
+  const replace = args.replace === true;
+
+  if (args.index != null) {
+    const target = requireIndex(args.index);
+    if (!target.editable) {
+      throw new Error(
+        `#${target.n} ${target.label} is not a text field. Pass the field's index.`
+      );
+    }
+    if (replace) {
+      await fillField(target, text);
+    } else {
+      await pressPoint(target);
+      await runAd(["type", text]);
+    }
+    return { skipped: false, note: null };
+  }
+
+  if (args.label) {
+    const targets = await snapshotTargets();
+    const fields = exactLabelMatches(targets, args.label).filter(
+      (t) => t.editable
+    );
+    if (fields.length > 1) {
+      return { skipped: true, note: ambiguousLabelNote(args.label, fields) };
+    }
+    if (fields.length === 1) {
+      // A named field has always been replaced. replace:false appends.
+      if (args.replace === false) {
+        await pressPoint(fields[0]);
+        await runAd(["type", text]);
+      } else {
+        await fillField(fields[0], text);
+      }
+      return { skipped: false, note: null };
+    }
+    const escaped = String(args.label).replace(/"/g, '\\"');
+    await runAd(["fill", `label="${escaped}"`, text, "--settle"]);
+    return { skipped: false, note: null };
+  }
+
+  if (replace) {
+    await runAd(["fill", "focused=true", text, "--settle"]);
+  } else {
+    await runAd(["type", text]);
+    await runAd(["snapshot", "-i"]);
+  }
+  return { skipped: false, note: null };
+}
+
+async function pressKey(key) {
+  if (key === "search" || key === "return") {
+    await runAd(["keyboard", "enter"]);
+    return `Pressed keyboard ${key}`;
+  }
+  if (key === "dismiss") {
+    await runAd(["keyboard", "dismiss"]);
+    return "Dismissed keyboard";
+  }
+  if (key === "delete") {
+    const keyTarget = keyboardDeleteTarget(lastTargets, screenSize.height);
+    if (!keyTarget) {
+      throw new Error(
+        "No keyboard delete key in the last look. Use type with replace:true to set the whole field."
+      );
+    }
+    await pressPoint(keyTarget);
+    return "Pressed keyboard delete";
+  }
+  throw new Error('press key must be "search", "return", "delete", or "dismiss"');
 }
 
 function swipeCoords(direction) {
@@ -477,9 +545,13 @@ function statusText() {
   return lines.join("\n");
 }
 
+const INSTRUCTIONS = `sim-eyes drives one leased iOS simulator. Every action returns the next screenshot plus numbered tappable controls, so a separate look is rarely needed. Call release when QA is done.
+
+tap and type accept index (the number from the last look). That number is the same control look just listed. type replace:true replaces the field instead of appending. press { key: "search"|"return"|"delete"|"dismiss" } hits the keyboard, not a row with the same name. Pass save (a file path) on look or any action to write that screenshot to disk.`;
+
 const server = new Server(
-  { name: "sim-eyes", version: "1.1.0" },
-  { capabilities: { tools: {} } }
+  { name: "sim-eyes", version: "1.2.0" },
+  { capabilities: { tools: {} }, instructions: INSTRUCTIONS }
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -511,28 +583,41 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "look",
       description:
-        "Screenshot of the frontmost simulator app plus numbered tappable controls with point coordinates. Auto-acquires a lease if needed.",
-      inputSchema: { type: "object", properties: {} },
+        "Screenshot of the frontmost simulator app plus numbered tappable controls. Each line includes a text field's placeholder and value when they differ from its label. Pass index from this list to tap or type. Optional save writes the PNG to that path.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          save: {
+            type: "string",
+            description: "File path for this screenshot. Relative paths use the process cwd.",
+          },
+        },
+      },
     },
     {
       name: "open",
       description: "Launch an app by name or bundle id, then return look output.",
       inputSchema: {
         type: "object",
-        properties: { name: { type: "string" } },
+        properties: {
+          name: { type: "string" },
+          save: { type: "string", description: "File path for the screenshot after launch." },
+        },
         required: ["name"],
       },
     },
     {
       name: "tap",
       description:
-        "Tap a control by label from look, or by x/y point coordinates. Returns the next screenshot.",
+        "Tap a control by index from the last look, by label, or by x/y. One label shared by several controls is not tapped; the result lists their indexes. Returns the next screenshot.",
       inputSchema: {
         type: "object",
         properties: {
+          index: { type: "number", description: "Number from the last look." },
           label: { type: "string" },
           x: { type: "number" },
           y: { type: "number" },
+          save: { type: "string", description: "File path for the screenshot after the tap." },
         },
       },
     },
@@ -547,6 +632,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             enum: ["up", "down", "left", "right"],
           },
+          save: { type: "string", description: "File path for the screenshot after the swipe." },
         },
         required: ["direction"],
       },
@@ -562,6 +648,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           y1: { type: "number" },
           x2: { type: "number" },
           y2: { type: "number" },
+          save: { type: "string", description: "File path for the screenshot after the drag." },
         },
         required: ["x1", "y1", "x2", "y2"],
       },
@@ -569,14 +656,56 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "type",
       description:
-        "Type text into a named field, or the focused field when label is omitted. Returns the next screenshot.",
+        "Type into a field by index from the last look, by label, or into the focused field when both are omitted. replace:true sets the whole value (fill). Otherwise text is appended. Returns the next screenshot.",
       inputSchema: {
         type: "object",
         properties: {
           text: { type: "string" },
+          index: { type: "number", description: "Field number from the last look." },
           label: { type: "string" },
+          replace: {
+            type: "boolean",
+            description: "Replace the field value instead of appending.",
+          },
+          save: { type: "string", description: "File path for the screenshot after typing." },
         },
         required: ["text"],
+      },
+    },
+    {
+      name: "press",
+      description:
+        "Press a keyboard key without matching an on-screen label. search and return submit the focused field. dismiss hides the keyboard. delete taps the keyboard delete key from the last look, not an app button named Delete. Returns the next screenshot.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          key: {
+            type: "string",
+            enum: ["search", "return", "delete", "dismiss"],
+          },
+          save: { type: "string", description: "File path for the screenshot after the key." },
+        },
+        required: ["key"],
+      },
+    },
+    {
+      name: "batch",
+      description:
+        "Run several actions in one call, in order: each item is {tool, ...that tool's args} for look, open, tap, swipe, drag, type, press, or record, plus {tool:\"wait\", ms}. An index refers to the look taken after the previous step. Stops at the first error or skipped tap/type. Returns one line per step and the final screenshot; pass save on a step to keep its screenshot.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          actions: {
+            type: "array",
+            minItems: 1,
+            items: {
+              type: "object",
+              properties: { tool: { type: "string" } },
+              required: ["tool"],
+            },
+          },
+        },
+        required: ["actions"],
       },
     },
     {
@@ -596,7 +725,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+  const result = await handleTool(name, args ?? {});
+  delete result.poolBusy;
+  delete result.skipped;
+  return result;
+});
+
+async function handleTool(name, args) {
   try {
+    if (name === "batch") return await runBatch(args.actions);
+
     if (name === "status") {
       const pool = await poolStatusText();
       return toolResult(`${statusText()}\n\n--- sim-pool ---\n${pool}`);
@@ -622,31 +760,42 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!binding) return toolResult("Nothing to release (not bound).");
       const before = statusText();
       await releaseBinding();
-      return toolResult(`Released.\nWas:\n${before}`);
+      return toolResult(
+        `Released.\nWas:\n${before}`
+      );
     }
 
     if (name === "look") {
       const payload = await lookPayload();
-      return toolResult(payload.text, payload.image);
+      return respond(payload.text, payload, args.save);
     }
 
     if (name === "open") {
       await runAd(["open", args.name, "--relaunch"], { timeoutMs: 180000 });
       appReady = true;
       const payload = await lookPayload();
-      return toolResult(
+      return respond(
         `${bindingBanner()}Opened ${args.name}\n\n${payload.text}`,
-        payload.image
+        payload,
+        args.save
       );
     }
 
     if (name === "tap") {
       let tapNote = "";
-      if (args.label) {
+      if (args.index != null) {
+        const target = requireIndex(args.index);
+        await pressPoint(target);
+        tapNote = `Tapped #${target.n} ${target.label}\n\n`;
+      } else if (args.label) {
         const result = await tapByLabel(String(args.label));
         if (result.skipped) {
           const shot = await captureScreenshot("look");
-          return toolResult(result.note, shot.base64);
+          const saved = await saveShot(shot.path, args.save);
+          return {
+            ...toolResult(`${result.note}${saved}`, shot.base64),
+            skipped: true,
+          };
         }
         tapNote = result.note ? `${result.note}\n\n` : "";
       } else if (args.x != null && args.y != null) {
@@ -657,19 +806,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           "--settle",
         ]);
       } else {
-        throw new Error("tap needs label or x and y");
+        throw new Error("tap needs index, label, or x and y");
       }
       const payload = await afterMutation();
-      return toolResult(tapNote + payload.text, payload.image);
+      return respond(tapNote + payload.text, payload, args.save);
     }
 
     if (name === "swipe") {
       const [x1, y1, x2, y2] = swipeCoords(args.direction);
       await runAd(["swipe", String(x1), String(y1), String(x2), String(y2)]);
       const payload = await afterMutation();
-      return toolResult(
+      return respond(
         `Swiped ${args.direction}\n\n${payload.text}`,
-        payload.image
+        payload,
+        args.save
       );
     }
 
@@ -686,19 +836,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         "600",
       ]);
       const payload = await afterMutation();
-      return toolResult(payload.text, payload.image);
+      return respond(payload.text, payload, args.save);
     }
 
     if (name === "type") {
-      if (args.label) {
-        const escaped = String(args.label).replace(/"/g, '\\"');
-        await runAd(["fill", `label="${escaped}"`, args.text, "--settle"]);
-      } else {
-        await runAd(["type", args.text]);
-        await runAd(["snapshot", "-i"]);
+      const typed = await typeText(args);
+      if (typed.skipped) {
+        const shot = await captureScreenshot("look");
+        const saved = await saveShot(shot.path, args.save);
+        return { ...toolResult(`${typed.note}${saved}`, shot.base64), skipped: true };
       }
       const payload = await afterMutation();
-      return toolResult(payload.text, payload.image);
+      return respond(payload.text, payload, args.save);
+    }
+
+    if (name === "press") {
+      const note = await pressKey(String(args.key));
+      const payload = await afterMutation();
+      return respond(`${note}\n\n${payload.text}`, payload, args.save);
     }
 
     if (name === "record") {
@@ -774,9 +929,71 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     return {
       content: [{ type: "text", text }],
       isError: true,
+      poolBusy: busy,
     };
   }
-});
+}
+
+const BATCH_TOOLS = new Set(["look", "open", "tap", "swipe", "drag", "type", "press", "record", "wait"]);
+
+/** First line of a step's text plus any "Saved" line; the full target list is only shown for the last step. */
+function stepSummary(text) {
+  const lines = text.split("\n").filter((l) => l && !l.startsWith("[session"));
+  const saved = lines.filter((l) => l.startsWith("Saved "));
+  return [lines[0] ?? "", ...saved.filter((l) => l !== lines[0])].join(" · ");
+}
+
+async function runBatch(actions) {
+  if (!Array.isArray(actions) || actions.length === 0) {
+    throw new Error("batch needs actions: [{tool, ...args}]");
+  }
+  const bad = actions.find((a) => !BATCH_TOOLS.has(a?.tool));
+  if (bad) {
+    throw new Error(
+      `batch cannot run "${bad?.tool}". Allowed: ${[...BATCH_TOOLS].join(", ")}`
+    );
+  }
+  const log = [];
+  let last = null;
+  for (const [i, action] of actions.entries()) {
+    const { tool, ...args } = action;
+    const step = `${i + 1}. ${tool}`;
+    if (tool === "wait") {
+      const ms = Math.min(Math.max(Number(args.ms) || 500, 0), 10000);
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      log.push(`${step}: waited ${ms}ms`);
+      last = null; // a trailing wait should end on a fresh screenshot
+      continue;
+    }
+    const result = await handleTool(tool, args);
+    const text = result.content[0]?.text ?? "";
+    if (result.isError || result.skipped) {
+      const why = result.isError ? "failed" : "skipped";
+      const rest = actions.length - i - 1;
+      log.push(`${step} ${why}; ${rest} remaining step(s) not run.\n\n${text}`);
+      return {
+        ...result,
+        content: [{ type: "text", text: log.join("\n") }, ...result.content.slice(1)],
+        isError: true,
+      };
+    }
+    const summary =
+      tool === "look" ? `${lastTargets.length} controls${stepSummary(text).match(/ · Saved .*/)?.[0] ?? ""}` : stepSummary(text);
+    log.push(`${step}: ${summary}`);
+    last = result;
+  }
+  if (!last) {
+    const payload = await lookPayload();
+    return toolResult(`${log.join("\n")}\n\n${payload.text}`, payload.image);
+  }
+  const lastText = last.content[0]?.text ?? "";
+  return {
+    content: [
+      { type: "text", text: `${log.join("\n")}\n\n${lastText}` },
+      ...last.content.slice(1),
+    ],
+  };
+}
 
 function toolResult(text, images) {
   const content = [{ type: "text", text }];

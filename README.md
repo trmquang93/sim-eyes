@@ -21,15 +21,17 @@ Also install/use the **sim-pool** skill. Set `SIM_POOL_BIN` if it is not under `
 
 | Tool | Arguments |
 | --- | --- |
-| `look` | none |
-| `open` | `{ "name": "com.example.app" }` |
-| `tap` | `{ "label": "Save" }` or `{ "x": 180, "y": 420 }` |
+| `look` | optional `{ "save": "shot.png" }` |
+| `open` | `{ "name": "com.example.app", "save": "shot.png" }` |
+| `tap` | `{ "index": 2 }` from the last look, `{ "label": "Save" }`, or `{ "x": 180, "y": 420 }` |
 | `swipe` | `{ "direction": "up" }` |
 | `drag` | `{ "x1": 40, "y1": 400, "x2": 300, "y2": 400 }` |
-| `type` | `{ "text": "hello", "label": "Search" }` |
+| `type` | `{ "text": "hello", "index": 1, "replace": true }` or `{ "text": "hello", "label": "Search" }` |
+| `press` | `{ "key": "search" }` — also `return`, `delete`, `dismiss` |
 | `record` | `{ "action": "start" }` then a gesture then `{ "action": "stop" }` |
+| `batch` | `{ "actions": [{ "tool": "tap", "label": "Files" }, { "tool": "wait", "ms": 300 }, { "tool": "tap", "index": 3, "save": "shot.png" }] }` — runs in order, an index refers to the previous step's look, stops at the first error or skipped tap/type, returns one line per step plus the final screenshot |
 
-`tap` by label presses that accessibility label. If the press fails, and `TYPESAFE_API_KEY` is set, one TypeSafe choice picks a control from the on-screen list. Coordinates are points. Screenshots are 1x.
+`look` numbers every control and, for a text field, prints `placeholder` and `value` when they differ from the label. `tap` and `type` accept that `index`, so the control you saw is the one that is pressed. A label shared by two controls is not pressed; the reply lists the indexes. `type` with `replace: true` sets the whole field. `press` sends a keyboard key (`search` and `return` submit, `dismiss` hides the keyboard, `delete` is the keyboard delete key) and does not match a row with the same name. `save` on any of these tools copies the screenshot to that path. Coordinates are points. Screenshots are 1x.
 
 Requires [agent-device](https://www.npmjs.com/package/agent-device) (`npx` is used when it is not on `PATH`) and a booted iOS simulator. `record` stop also uses `ffmpeg`.
 
