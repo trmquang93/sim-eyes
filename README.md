@@ -8,6 +8,16 @@ Cursor MCP for an iOS simulator. Each call returns the next screenshot.
 
 **Fix (v1.1):** Each MCP process gets a unique `agent-device` session (`sim-eyes-<pid>-<hex>`) and leases a simulator through [sim-pool](https://github.com/trmquang93) (`~/.claude/skills/sim-pool`).
 
+**Session IDs (v1.3):** One `sim-eyes` MCP process can serve many chats. Each chat starts with `acquire` or `batch` **without** `session_id`; the response begins with `session_id=se-…`. Pass that on **every** later `batch`, `acquire`, `status`, and `release`. Each `session_id` gets its own sim-pool lease and agent-device session — no UDID in `mcp.json`. sim-pool picks a free whitelisted device per new session.
+
+| Goal | What to do |
+| --- | --- |
+| Two chats, two sims | Each chat omits `session_id` once, keeps its own `session_id` on all calls. |
+| Switch sim in one chat | Same `session_id`, `acquire` with `rebind:true` (optional `prefer_udid`). |
+| End QA | `release` with that chat's `session_id`. |
+
+Unit tests use `scripts/run-unit-tests.sh` (separate lease), not the UI chat's `session_id`.
+
 | Tool | Purpose |
 | --- | --- |
 | `acquire` | Lease an exclusive UDID (optional `prefer_udid` / `prefer_device`) |

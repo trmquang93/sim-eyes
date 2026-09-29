@@ -48,23 +48,39 @@ import {
   releaseLease,
   renewLease,
 } from "./pool.mjs";
+import { preferDiffersFromBinding, SESSION_ID_RULE } from "./binding-prefer.mjs";
+import {
+  SessionRegistry,
+  formatSessionPrefix,
+} from "./client-sessions.mjs";
+import { SESSION_ID_PROPERTY } from "./session-schema.mjs";
 
 const INSTANCE_ID = process.env.SIM_EYES_INSTANCE_ID || defaultInstanceId();
 const WORK_ROOT = join(homedir(), ".local", "sim-eyes", "work");
-/** @type {{ leaseId: string, udid: string, name: string, expiresAt: string, session: string } | null} */
-let binding = null;
-/** Controls from the last snapshot. `index` on tap/type refers to this list. */
-let lastTargets = [];
-/** screenContext of the last snapshot. */
-let lastScreen = null;
-let recordingPath = null;
-let screenSize = { width: 402, height: 874 };
-let appReady = false;
-let releasing = false;
+const registry = new SessionRegistry();
+/** Active client session for the current MCP tool call (set in handleMcpTool). */
+let ctx = null;
 
 function workDir() {
-  const session = binding?.session ?? `sim-eyes-${INSTANCE_ID}`;
+  const session =
+    ctx.binding?.session ?? `sim-eyes-${INSTANCE_ID}-${ctx.id}`;
   return join(WORK_ROOT, session);
+}
+
+function stripSessionArgs(args) {
+  if (!args) return {};
+  const { session_id, ...rest } = args;
+  return rest;
+}
+
+function prefixSession(result, sessionId, created) {
+  if (!sessionId || !result?.content?.[0] || result.content[0].type !== "text") {
+    return result;
+  }
+  const head = formatSessionPrefix(sessionId, created);
+  if (result.content[0].text.startsWith("session_id=")) return result;
+  result.content[0].text = head + result.content[0].text;
+  return result;
 }
 
 function adCommand() {
@@ -116,30 +132,21 @@ function usePool() {
 }
 
 async function acquireBinding({ preferUdid, preferDevice } = {}) {
-  if (binding) {
-    await renewLease(binding.leaseId).catch(() => {});
-    return binding;
+  if (ctx.binding) {
+    await renewLease(ctx.binding.leaseId).catch(() => {});
+    return ctx.binding;
   }
 
-  const prefer =
-    preferUdid ||
-    process.env.SIM_EYES_PREFER_UDID ||
-    process.env.DEVICE_ID ||
-    undefined;
-  const preferName =
-    preferDevice ||
-    process.env.SIM_EYES_PREFER_DEVICE ||
-    process.env.SIM_EYES_DEVICE ||
-    undefined;
+  const prefer = preferUdid || undefined;
+  const preferName = preferDevice || undefined;
 
   if (usePool()) {
-    // Resolve preferred name → udid when only a name is set.
     let udid = prefer;
     if (!udid && preferName) {
       udid = await resolveDeviceNameToUdid(preferName);
     }
-    binding = await acquireLease({
-      instanceId: INSTANCE_ID,
+    ctx.binding = await acquireLease({
+      instanceId: `${INSTANCE_ID}-${ctx.id}`,
       preferUdid: udid,
       preferDevice: preferName,
       project: process.env.SIM_EYES_PROJECT || "sim-eyes",
@@ -149,18 +156,17 @@ async function acquireBinding({ preferUdid, preferDevice } = {}) {
         : undefined,
     });
   } else {
-    // Single-agent fallback: unique session, but still may share a physical sim.
     const device = prefer || preferName || (await pickAnyBootedDevice());
-    binding = {
+    ctx.binding = {
       leaseId: "",
       udid: device,
       name: device,
       expiresAt: "",
-      session: `sim-eyes-${INSTANCE_ID}`,
+      session: `sim-eyes-${INSTANCE_ID}-${ctx.id}`,
     };
   }
   await mkdir(workDir(), { recursive: true });
-  return binding;
+  return ctx.binding;
 }
 
 async function resolveDeviceNameToUdid(nameOrId) {
@@ -197,26 +203,26 @@ async function pickAnyBootedDevice() {
 }
 
 async function ensureBound() {
-  if (!binding) await acquireBinding();
-  else if (binding.leaseId) {
+  if (!ctx.binding) await acquireBinding();
+  else if (ctx.binding.leaseId) {
     try {
-      await renewLease(binding.leaseId);
+      await renewLease(ctx.binding.leaseId);
     } catch (err) {
-      binding = null;
+      ctx.binding = null;
       throw new Error(
         `Lease lost (${err.message}). Call acquire again or mark QA inconclusive.`
       );
     }
   }
-  return binding;
+  return ctx.binding;
 }
 
 async function releaseBinding({ closeSession = true } = {}) {
-  if (releasing || !binding) return;
-  releasing = true;
-  const current = binding;
-  binding = null;
-  appReady = false;
+  if (ctx.releasing || !ctx.binding) return;
+  ctx.releasing = true;
+  const current = ctx.binding;
+  ctx.binding = null;
+  ctx.appReady = false;
   try {
     if (closeSession) {
       await spawnAd(
@@ -233,7 +239,7 @@ async function releaseBinding({ closeSession = true } = {}) {
     }
     if (current.leaseId) await releaseLease(current.leaseId);
   } finally {
-    releasing = false;
+    ctx.releasing = false;
   }
 }
 
@@ -271,9 +277,9 @@ async function runAdJson(args, opts) {
 }
 
 async function ensureApp() {
-  if (appReady) return;
+  if (ctx.appReady) return;
   await runAd(["open", "Settings", "--relaunch"], { timeoutMs: 180000 });
-  appReady = true;
+  ctx.appReady = true;
 }
 
 async function snapshotTargets() {
@@ -281,14 +287,14 @@ async function snapshotTargets() {
   const data = await runAdJson(["snapshot", "-i"]);
   const nodes = data.data?.nodes ?? [];
   if (nodes[0]?.rect) {
-    screenSize = {
+    ctx.screenSize = {
       width: nodes[0].rect.width,
       height: nodes[0].rect.height,
     };
   }
   const targets = listTargets(nodes);
-  lastTargets = targets;
-  lastScreen = screenContext(nodes);
+  ctx.lastTargets = targets;
+  ctx.lastScreen = screenContext(nodes);
   return targets;
 }
 
@@ -302,8 +308,8 @@ async function captureScreenshot(tag = "screen") {
 }
 
 function bindingBanner() {
-  if (!binding) return "";
-  return `[session ${binding.session} · ${binding.name} · ${binding.udid}]\n`;
+  if (!ctx.binding) return "";
+  return `[session ${ctx.binding.session} · ${ctx.binding.name} · ${ctx.binding.udid}]\n`;
 }
 
 async function lookPayload() {
@@ -344,9 +350,9 @@ async function pressPoint(target) {
 }
 
 function requireIndex(index) {
-  const target = targetByIndex(lastTargets, index);
+  const target = targetByIndex(ctx.lastTargets, index);
   if (!target) {
-    const list = formatTargets(lastTargets);
+    const list = formatTargets(ctx.lastTargets);
     throw new Error(
       `No control #${index} in the last look. Pass a number from that list.\n\n${list}`
     );
@@ -454,7 +460,7 @@ async function pressKey(key) {
     return "Dismissed keyboard";
   }
   if (key === "delete") {
-    const keyTarget = keyboardDeleteTarget(lastTargets, screenSize.height);
+    const keyTarget = keyboardDeleteTarget(ctx.lastTargets, ctx.screenSize.height);
     if (!keyTarget) {
       throw new Error(
         "No keyboard delete key in the last look. Use type with replace:true to set the whole field."
@@ -467,8 +473,8 @@ async function pressKey(key) {
 }
 
 function swipeCoords(direction) {
-  const w = screenSize.width;
-  const h = screenSize.height;
+  const w = ctx.screenSize.width;
+  const h = ctx.screenSize.height;
   const mx = Math.round(w / 2);
   const my = Math.round(h / 2);
   const margin = 0.2;
@@ -579,13 +585,13 @@ async function actOn(args) {
 
   for (;;) {
     const targets = await snapshotTargets();
-    const step = await decideStep({ instruction, text, targets, history, client, screen: screenSize, context: lastScreen });
+    const step = await decideStep({ instruction, text, targets, history, client, screen: ctx.screenSize, context: ctx.lastScreen });
     const doneP = step.doneProbability.toFixed(2);
     if (process.env.SIM_EYES_ACT_DUMP) {
       // Replayable decision states for eval-act.mjs.
       await appendFile(
         process.env.SIM_EYES_ACT_DUMP,
-        JSON.stringify({ instruction, text, targets, history, screen: screenSize, context: lastScreen, step: { ...step, action: undefined } }) + "\n"
+        JSON.stringify({ instruction, text, targets, history, screen: ctx.screenSize, context: ctx.lastScreen, step: { ...step, action: undefined } }) + "\n"
       );
     }
     if (step.doneProbability >= ACT_DONE_MIN) {
@@ -605,7 +611,7 @@ async function actOn(args) {
       return note(`stuck: "${step.key}" again on an unchanged screen.`, false);
     }
     tried.add(attempt);
-    history.push(stepRecord(step.action, lastScreen?.title));
+    history.push(stepRecord(step.action, ctx.lastScreen?.title));
     const done = await runActAction(step.action);
     log.push(`${done} (confidence ${step.confidence.toFixed(2)})`);
   }
@@ -616,31 +622,58 @@ function statusText() {
     `instance: ${INSTANCE_ID}`,
     `pool: ${usePool() ? findSimPoolBin() : "disabled/unavailable"}`,
   ];
-  if (binding) {
+  lines.push(`client_session_id: ${ctx.id}`);
+  if (ctx.binding) {
     lines.push(
       `bound: yes`,
-      `session: ${binding.session}`,
-      `udid: ${binding.udid}`,
-      `name: ${binding.name}`,
-      `lease: ${binding.leaseId || "(none)"}`,
-      `expires: ${binding.expiresAt || "(n/a)"}`
+      `agent_device_session: ${ctx.binding.session}`,
+      `udid: ${ctx.binding.udid}`,
+      `name: ${ctx.binding.name}`,
+      `lease: ${ctx.binding.leaseId || "(none)"}`,
+      `expires: ${ctx.binding.expiresAt || "(n/a)"}`
     );
   } else {
-    lines.push(`bound: no (first look/open/tap will acquire)`);
+    lines.push(`bound: no (batch/acquire will lease via sim-pool)`);
   }
   return lines.join("\n");
 }
 
 const BATCH_TOOLS = new Set(["look", "open", "tap", "swipe", "drag", "type", "press", "record", "wait", "act"]);
 
-const INSTRUCTIONS = `sim-eyes drives one leased iOS simulator. Every action goes through batch, which takes an array of actions (one is fine, several is better). Queue every step you can predict, such as tap, wait, type, press, tap, instead of one call each. The result is one line per step plus the final screenshot and numbered tappable controls, so a separate look is rarely needed. Call release when QA is done.
+/** Shared catalog for MCP instructions and the batch tool description (keep in sync with README). */
+const BATCH_ACTION_CATALOG = `MCP tools (not batch steps): acquire, release, status, batch — each takes session_id (omit only on the first acquire/batch). Simulator input is ONLY batch.actions[] — calling look/tap/… as top-level tools returns an error.
 
-An index in a step refers to the controls listed after the previous step. type replace:true replaces the field instead of appending. press { key: "search"|"return"|"delete"|"dismiss" } hits the keyboard, not a row with the same name. Pass save (a file path) on any step to write that screenshot to disk. The queue stops at the first error or ambiguous label, so put steps that depend on an unpredictable screen in the next call.
+Each action is one object: { "tool": "<name>", ...args }. Optional on every action: save (file path for that step's screenshot).
 
-When you cannot predict the screen (an alert that may or may not appear, a control you have not seen yet), queue act { instruction } instead of guessing. act looks at the screen, lets TypeSafe pick one tap, swipe, key or field fill, and repeats until the instruction is fulfilled or max_steps runs out. act types only the text you pass in text; it never invents text. It stops the queue when it gets stuck.`;
+| tool | Use when | Arguments (besides save) |
+| --- | --- | --- |
+| look | Refresh screenshot + numbered controls without tapping | (none) |
+| open | Launch or relaunch an app | name (display name or bundle id) |
+| tap | Target is known from the last step's control list | index (from list), or label, or x + y |
+| swipe | Scroll or page | direction: up, down, left, or right |
+| drag | Custom pan gesture | x1, y1, x2, y2 (points) |
+| type | Enter text in a known field | text + index or label; optional replace:true (replace whole field) |
+| press | Keyboard key (not a row with the same name) | key: search, return, delete, or dismiss |
+| record | Screen capture to mp4 | action: start or stop (stop also returns contact sheet / frames) |
+| wait | Animation or load time | ms (0–10000) |
+| act | Screen is unpredictable — do not guess tap/type | instruction (required); optional text (only text act may type); optional max_steps (default ${ACT_DEFAULT_STEPS}, max ${ACT_MAX_STEPS}) |
+
+Rules:
+- Queue predictable steps in one batch (e.g. open → wait → tap → type → press). index/label always refer to the control list from the step before.
+- The batch stops on the first error, ambiguous label (two indexes share a label), skipped tap/type, or act stuck/skipped. Remaining queued steps are not run — continue in a new batch.
+- Unpredictable UI (permissions, alerts, lists you have not seen): use act, read the step log + final screenshot, then batch explicit tap/type steps.
+- act repeats look → TypeSafe picks one action → run until goal met, max_steps, low confidence, no helpful action, or same action on an unchanged screen. Needs TYPESAFE_API_KEY.`;
+
+const INSTRUCTIONS = `sim-eyes drives one leased iOS simulator per session_id. ${SESSION_ID_RULE}
+
+First acquire or batch in a chat: omit session_id; the response begins with session_id=…. Every later call (batch, acquire, status, release) must pass that same session_id. Call release with session_id when QA ends.
+
+${BATCH_ACTION_CATALOG}
+
+Example: { "actions": [{ "tool": "open", "name": "VideoTools" }, { "tool": "wait", "ms": 1500 }, { "tool": "act", "instruction": "allow notifications if a system dialog appears" }] }`;
 
 const server = new Server(
-  { name: "sim-eyes", version: "1.2.0" },
+  { name: "sim-eyes", version: "1.3.0" },
   { capabilities: { tools: {} }, instructions: INSTRUCTIONS }
 );
 
@@ -648,49 +681,83 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: "acquire",
-      description:
-        "Lease an exclusive simulator via sim-pool for this agent. Call before QA when multiple agents share a Mac. Optional prefer_udid / prefer_device.",
+      description: `Lease one simulator for this session_id via sim-pool (no UDID in mcp.json). ${SESSION_ID_RULE} Optional prefer_udid / prefer_device on the tool args only. rebind:true switches simulators for this session_id.`,
       inputSchema: {
         type: "object",
         properties: {
-          prefer_udid: { type: "string" },
-          prefer_device: { type: "string" },
+          ...SESSION_ID_PROPERTY,
+          prefer_udid: {
+            type: "string",
+            description: "Whitelisted simulator UDID. Fails if leased to another owner unless pool assigns you a different free device when omitted.",
+          },
+          prefer_device: {
+            type: "string",
+            description: "Simulator display name (resolved to UDID). Ignored when prefer_udid is set.",
+          },
+          rebind: {
+            type: "boolean",
+            description:
+              "When this session_id is already bound: release its lease and acquire again (honors prefer_*).",
+          },
         },
       },
     },
     {
       name: "release",
-      description:
-        "Release this agent's simulator lease and close its agent-device session. Call when QA is done.",
-      inputSchema: { type: "object", properties: {} },
+      description: `Release this session_id's sim-pool lease. session_id is required.`,
+      inputSchema: {
+        type: "object",
+        properties: { ...SESSION_ID_PROPERTY },
+        required: ["session_id"],
+      },
     },
     {
       name: "status",
       description:
-        "Show this MCP process binding and host sim-pool status (who holds which UDID).",
-      inputSchema: { type: "object", properties: {} },
+        "Show this session_id's simulator binding and host sim-pool status. session_id is required.",
+      inputSchema: {
+        type: "object",
+        properties: { ...SESSION_ID_PROPERTY },
+        required: ["session_id"],
+      },
     },
     {
       name: "batch",
-      description:
-        "The only way to act on the simulator. Takes an array of actions and runs them in order; pass one action or queue several (e.g. tap, wait, type, press, tap) to save round-trips. Each item is {tool, ...args}: look {save}, open {name}, tap {index | label | x,y}, swipe {direction}, drag {x1,y1,x2,y2}, type {text, index | label, replace}, press {key: search|return|delete|dismiss}, record {action: start|stop}, wait {ms}, act {instruction, text, max_steps}. act takes a plain-language goal for a screen you cannot predict (e.g. 'allow notifications if asked', 'open the first video') and lets TypeSafe choose each tap, swipe, key or field fill until it is done. An index refers to the look taken after the previous step, so queue steps whose targets you already know; look again when a step changes the screen in ways you cannot predict. Stops at the first error or skipped tap/type. Returns one line per step and the final screenshot with numbered controls; pass save on a step to keep its screenshot.",
+      description: `Run simulator steps in order. Pass one action or queue many to save round-trips.
+
+${BATCH_ACTION_CATALOG}
+
+Response: one log line per completed step, then the final screenshot (image) and numbered tappable controls (text). act steps include a multi-line log in the first paragraph; the control list follows after a blank line.`,
       inputSchema: {
         type: "object",
         properties: {
+          ...SESSION_ID_PROPERTY,
           actions: {
             type: "array",
             minItems: 1,
+            description:
+              "Steps to run in order. Each element is { tool, ... }. Allowed tool values: look, open, tap, swipe, drag, type, press, record, wait, act. See the batch tool description for which fields each tool needs.",
             items: {
               type: "object",
+              description:
+                "One simulator step. Required: tool. Other fields depend on tool (see catalog in batch description). save is optional on any tool.",
               properties: {
                 tool: {
                   type: "string",
                   enum: [...BATCH_TOOLS],
+                  description:
+                    "Step kind. look=screenshot; open=name; tap=index|label|x+y; swipe=direction; drag=x1,y1,x2,y2; type=text+(index|label); press=key; record=action start|stop; wait=ms; act=instruction (+ optional text, max_steps).",
                 },
-                index: { type: "number", description: "tap/type: number from the last look." },
-                label: { type: "string", description: "tap/type: control label." },
-                x: { type: "number", description: "tap: x point." },
-                y: { type: "number", description: "tap: y point." },
+                index: {
+                  type: "number",
+                  description: "tap, type: control number from the previous step's list (not from an earlier step).",
+                },
+                label: {
+                  type: "string",
+                  description: "tap, type: accessibility label. Fails if two controls share the label (reply lists indexes).",
+                },
+                x: { type: "number", description: "tap: x coordinate (use with y instead of index/label)." },
+                y: { type: "number", description: "tap: y coordinate (use with x)." },
                 x1: { type: "number", description: "drag: start x." },
                 y1: { type: "number", description: "drag: start y." },
                 x2: { type: "number", description: "drag: end x." },
@@ -698,36 +765,40 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 direction: {
                   type: "string",
                   enum: ["up", "down", "left", "right"],
-                  description: "swipe: direction.",
+                  description: "swipe: scroll/page direction.",
                 },
-                text: { type: "string", description: "type: text to enter. act: the only text act may type into a field." },
+                text: {
+                  type: "string",
+                  description: "type: characters to enter. act: only text the agent may type into a field (act never invents text).",
+                },
                 replace: {
                   type: "boolean",
-                  description: "type: replace the field value instead of appending.",
+                  description: "type only: true replaces the whole field; false appends.",
                 },
                 key: {
                   type: "string",
                   enum: ["search", "return", "delete", "dismiss"],
-                  description: "press: keyboard key.",
+                  description: "press: keyboard key (search/return submit, dismiss hides keyboard, delete is backspace).",
                 },
-                name: { type: "string", description: "open: app name or bundle id." },
+                name: { type: "string", description: "open: app display name or bundle identifier." },
                 action: {
                   type: "string",
                   enum: ["start", "stop"],
-                  description: "record: start or stop.",
+                  description: "record: start begins mp4 capture; stop ends it and returns frames.",
                 },
-                ms: { type: "number", description: "wait: milliseconds (max 10000)." },
+                ms: { type: "number", description: "wait: delay in milliseconds (capped at 10000)." },
                 instruction: {
                   type: "string",
-                  description: "act: plain-language goal, e.g. \"dismiss any alert\" or \"open Wi-Fi settings\".",
+                  description:
+                    "act: plain-language goal for an unpredictable screen, e.g. \"dismiss any alert\", \"open the first video in the list\", \"open Wi-Fi settings\".",
                 },
                 max_steps: {
                   type: "number",
-                  description: `act: most actions to take (default ${ACT_DEFAULT_STEPS}, max ${ACT_MAX_STEPS}).`,
+                  description: `act only: cap on TypeSafe-driven actions in this act step (default ${ACT_DEFAULT_STEPS}, max ${ACT_MAX_STEPS}).`,
                 },
                 save: {
                   type: "string",
-                  description: "File path for this step's screenshot. Relative paths use the process cwd.",
+                  description: "Optional on any tool: write this step's screenshot to this path (relative to process cwd).",
                 },
               },
               required: ["tool"],
@@ -753,44 +824,111 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       isError: true,
     };
   }
-  const result = await handleTool(name, args ?? {});
+  const result = await handleMcpTool(name, args ?? {});
   delete result.poolBusy;
   delete result.skipped;
   return result;
 });
 
-async function handleTool(name, args) {
+async function handleMcpTool(name, rawArgs) {
+  let sessionId = null;
+  let created = false;
+  /** @type {import("./client-sessions.mjs").ClientSession | null} */
+  let callCtx = null;
   try {
-    if (name === "batch") return await runBatch(args.actions);
+    const resolved = registry.resolve(rawArgs?.session_id, {
+      allowCreate: name === "acquire" || name === "batch",
+      toolName: name,
+    });
+    callCtx = resolved.ctx;
+    ctx = callCtx;
+    sessionId = ctx.id;
+    created = resolved.created;
+    const args = stripSessionArgs(rawArgs);
 
+    let result;
+    if (name === "batch") result = await runBatch(args.actions);
+    else result = await handleToolCore(name, args ?? {});
+
+    return prefixSession(result, sessionId, created);
+  } catch (err) {
+    const busy =
+      err instanceof PoolBusyError || err?.code === "SIM_POOL_BUSY";
+    const text = busy
+      ? `SIM_POOL_BUSY: ${err.message}\nReport QA inconclusive — do not steal another agent's simulator.`
+      : `Error: ${err.message}`;
+    return prefixSession(
+      {
+        content: [{ type: "text", text }],
+        isError: true,
+        poolBusy: busy,
+      },
+      sessionId ?? "unknown",
+      created
+    );
+  } finally {
+    if (ctx === callCtx) ctx = null;
+  }
+}
+
+async function handleToolCore(name, args) {
+  try {
     if (name === "status") {
       const pool = await poolStatusText();
       return toolResult(`${statusText()}\n\n--- sim-pool ---\n${pool}`);
     }
 
     if (name === "acquire") {
-      if (binding) {
-        await renewLease(binding.leaseId).catch(() => {});
-        return toolResult(
-          `Already bound.\n${statusText()}\n\nReuse this session until release.`
-        );
-      }
-      await acquireBinding({
+      const prefer = {
         preferUdid: args?.prefer_udid,
         preferDevice: args?.prefer_device,
-      });
+      };
+      const rebind = args?.rebind === true;
+      if (ctx.binding) {
+        if (preferDiffersFromBinding(ctx.binding, prefer) && !rebind) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: [
+                  `Already bound to ${ctx.binding.name} (${ctx.binding.udid}).`,
+                  prefer.preferUdid || prefer.preferDevice
+                    ? `You asked for a different simulator (${prefer.preferUdid ?? prefer.preferDevice}).`
+                    : "",
+                  "Use status + sim-pool to see other leases. To switch: acquire with rebind:true and prefer_udid or prefer_device (same session_id).",
+                  statusText(),
+                ]
+                  .filter(Boolean)
+                  .join("\n\n"),
+              },
+            ],
+            isError: true,
+          };
+        }
+        if (rebind) {
+          await releaseBinding();
+        } else {
+          await renewLease(ctx.binding.leaseId).catch(() => {});
+          return toolResult(
+            `Already bound.\n${statusText()}\n\nReuse this session_id until release (or rebind:true to switch simulators).`
+          );
+        }
+      }
+      await acquireBinding(prefer);
       return toolResult(
-        `Acquired exclusive simulator for this agent.\n${statusText()}\n\nOther agents must acquire a different UDID (or wait if the pool is busy).`
+        `Acquired simulator for this session_id.\n${statusText()}\n\nOther session_ids get other free devices from sim-pool (or SIM_POOL_BUSY).`
       );
     }
 
     if (name === "release") {
-      if (!binding) return toolResult("Nothing to release (not bound).");
+      if (!ctx.binding) {
+        registry.delete(ctx.id);
+        return toolResult("Nothing to release (not bound). session_id discarded.");
+      }
       const before = statusText();
       await releaseBinding();
-      return toolResult(
-        `Released.\nWas:\n${before}`
-      );
+      registry.delete(ctx.id);
+      return toolResult(`Released.\n\nWas:\n${before}`);
     }
 
     if (name === "look") {
@@ -800,7 +938,7 @@ async function handleTool(name, args) {
 
     if (name === "open") {
       await runAd(["open", args.name, "--relaunch"], { timeoutMs: 180000 });
-      appReady = true;
+      ctx.appReady = true;
       const payload = await lookPayload();
       return respond(
         `${bindingBanner()}Opened ${args.name}\n\n${payload.text}`,
@@ -888,15 +1026,15 @@ async function handleTool(name, args) {
       if (args.action === "start") {
         const dir = workDir();
         await mkdir(dir, { recursive: true });
-        if (recordingPath) {
-          return toolResult(`Recording already running.\n${recordingPath}`);
+        if (ctx.recordingPath) {
+          return toolResult(`Recording already running.\n${ctx.recordingPath}`);
         }
-        recordingPath = join(dir, `clip-${Date.now()}.mp4`);
+        ctx.recordingPath = join(dir, `clip-${Date.now()}.mp4`);
         try {
           await runAd([
             "record",
             "start",
-            recordingPath,
+            ctx.recordingPath,
             "--scope",
             "device",
           ]);
@@ -908,18 +1046,18 @@ async function handleTool(name, args) {
           await runAd([
             "record",
             "start",
-            recordingPath,
+            ctx.recordingPath,
             "--scope",
             "device",
           ]);
         }
-        return toolResult(`Recording started.\n${recordingPath}`);
+        return toolResult(`Recording started.\n${ctx.recordingPath}`);
       }
       if (args.action === "stop") {
-        if (!recordingPath) throw new Error("No recording in progress");
+        if (!ctx.recordingPath) throw new Error("No recording in progress");
         const stopOut = await runAd(["record", "stop"]);
         const videoPath =
-          stopOut.trim().split("\n").pop()?.trim() || recordingPath;
+          stopOut.trim().split("\n").pop()?.trim() || ctx.recordingPath;
         const sheetPath = videoPath.replace(/\.mp4$/, ".sheet.png");
         const sheetOut = await runAd([
           "record",
@@ -935,7 +1073,7 @@ async function handleTool(name, args) {
         const images = [];
         if (sheetBase64) images.push(sheetBase64);
         for (const f of frames) images.push(f.base64);
-        recordingPath = null;
+        ctx.recordingPath = null;
         const summary = [
           "Recording stopped.",
           sheetOut.trim(),
@@ -999,7 +1137,7 @@ async function runBatch(actions) {
       last = null; // a trailing wait should end on a fresh screenshot
       continue;
     }
-    const result = await handleTool(tool, args);
+    const result = await handleToolCore(tool, args);
     const text = result.content[0]?.text ?? "";
     if (result.isError || result.skipped) {
       const why = result.isError ? "failed" : "skipped";
@@ -1014,7 +1152,7 @@ async function runBatch(actions) {
     const summary =
       tool === "act"
         ? text.split("\n\n")[0]
-        : tool === "look" ? `${lastTargets.length} controls${stepSummary(text).match(/ · Saved .*/)?.[0] ?? ""}` : stepSummary(text);
+        : tool === "look" ? `${ctx.lastTargets.length} controls${stepSummary(text).match(/ · Saved .*/)?.[0] ?? ""}` : stepSummary(text);
     log.push(`${step}: ${summary}`);
     last = result;
   }
@@ -1041,14 +1179,27 @@ function toolResult(text, images) {
   return { content };
 }
 
+async function releaseAllSessions() {
+  for (const session of registry.all()) {
+    ctx = session;
+    try {
+      if (session.binding) await releaseBinding({ closeSession: true });
+    } catch {
+      /* best effort */
+    }
+    registry.delete(session.id);
+  }
+  ctx = null;
+}
+
 function installExitHooks() {
   const cleanup = () => {
-    releaseBinding().finally(() => process.exit(0));
+    releaseAllSessions().finally(() => process.exit(0));
   };
   process.on("SIGINT", cleanup);
   process.on("SIGTERM", cleanup);
   process.on("beforeExit", () => {
-    if (binding) releaseBinding({ closeSession: true }).catch(() => {});
+    releaseAllSessions().catch(() => {});
   });
 }
 

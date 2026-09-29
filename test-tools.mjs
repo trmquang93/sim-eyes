@@ -35,16 +35,24 @@ try {
     capabilities: {},
     clientInfo: { name: "test-tools", version: "1" },
   });
-  assert.match(init.result.instructions, /batch/);
-  assert.match(init.result.instructions, /several/);
+  assert.match(init.result.instructions, /session_id/);
 
   const { tools } = (await rpc("tools/list", {})).result;
   assert.deepEqual(tools.map((t) => t.name).sort(), ["acquire", "batch", "release", "status"]);
   const batch = tools.find((t) => t.name === "batch");
-  assert.match(batch.description, /one action or queue several/);
+  assert.match(batch.description, /\| tool \| Use when \|/);
+  assert.match(batch.description, /\| act \|/);
   assert.deepEqual(batch.inputSchema.required, ["actions"]);
+  assert.ok(batch.inputSchema.properties.session_id);
   assert.ok(batch.inputSchema.properties.actions.items.properties.tool.enum.includes("act"));
-  assert.match(batch.description, /act \{instruction/);
+  assert.match(batch.inputSchema.properties.actions.description, /look, open, tap/);
+
+  const statusTool = tools.find((t) => t.name === "status");
+  assert.deepEqual(statusTool.inputSchema.required, ["session_id"]);
+
+  const noSid = (await rpc("tools/call", { name: "status", arguments: {} })).result;
+  assert.equal(noSid.isError, true);
+  assert.match(noSid.content[0].text, /requires session_id/);
 
   for (const name of ["tap", "look", "type"]) {
     const res = (await rpc("tools/call", { name, arguments: {} })).result;
