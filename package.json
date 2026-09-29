@@ -7,7 +7,7 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "test": "node test-pool.mjs && node test-batch-plan.mjs && node test-stale-sessions.mjs && node test-binding-prefer.mjs && node test-sessions.mjs && node test-targets.mjs && node test-tools.mjs && node test-act.mjs"
+    "test": "node test-pool.mjs && node test-batch-plan.mjs && node test-stale-sessions.mjs && node test-binding-prefer.mjs && node test-sessions.mjs && node test-targets.mjs && node test-tools.mjs && node test-act.mjs && node test-ocr.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",

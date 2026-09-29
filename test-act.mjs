@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { actOptions, decideStep, screenSignature, stepRecord } from "./act.mjs";
+import { actOptions, actState, decideStep, effectRecord, effectText, screenSignature, stepRecord } from "./act.mjs";
 import { screenContext } from "./targets.mjs";
 
 const targets = [
@@ -101,5 +101,40 @@ assert.deepEqual(
   ]),
   { title: "General", backTo: "Settings", alert: null, texts: ["General"] }
 );
+
+// A pager's position reaches TypeSafe, so "go to the next page" can be judged done after one Next:
+// on the intro, page 2 has the same Next button as page 1 and no navigation title.
+{
+  const pager = (n) => [
+    { type: "Application", label: "Demo App", index: 0 },
+    { type: "Other", label: `Page ${n} of 3`, index: 1, parentIndex: 0 },
+    { type: "Button", label: "Next", index: 2, parentIndex: 0 },
+  ];
+  assert.equal(screenContext(pager(1)).page, "Page 1 of 3");
+  assert.equal(screenContext(pager(2)).page, "Page 2 of 3");
+  assert.equal(screenContext([{ type: "StaticText", label: "General" }]).page, undefined);
+  const record = stepRecord({ kind: "tap", target: { label: "Next" } }, null, "Page 1 of 3");
+  assert.deepEqual(record, { action: "tap", control: "Next", onPage: "Page 1 of 3" });
+  const state = actState({ instruction: "go to the next intro page", targets: [], history: [record], context: screenContext(pager(2)) });
+  assert.equal(state.currentScreen.page, "Page 2 of 3");
+  assert.equal(state.stepsTaken[0].onPage, "Page 1 of 3");
+}
+
+// A tap's effect separates "changed where I tapped" (a checkmark appeared) from "nothing happened".
+{
+  assert.deepEqual(effectRecord({ changed: 756, bandChanged: 378 }), { screenChanged: true, changedAtControl: true });
+  assert.deepEqual(effectRecord({ changed: 6910, bandChanged: 0 }), { screenChanged: true, changedAtControl: false });
+  assert.deepEqual(effectRecord({ changed: 0, bandChanged: 0 }), { screenChanged: false, changedAtControl: false });
+  // Different screenshot sizes count as a change of the whole screen.
+  assert.equal(effectRecord({ changed: -1, bandChanged: -1 }).screenChanged, true);
+  assert.match(effectText({ screenChanged: false, changedAtControl: false }), /no effect/);
+  assert.match(effectText({ screenChanged: true, changedAtControl: true }), /at the tapped control/);
+  assert.match(effectText({ screenChanged: true, changedAtControl: false }), /not at the tapped control/);
+  assert.equal(effectText(undefined), "");
+  // TypeSafe sees the effect through the step record it already receives.
+  const record = { ...stepRecord({ kind: "tap", target: targets[0] }, "Language"), effect: effectRecord({ changed: 5, bandChanged: 5 }) };
+  const state = actState({ instruction: "select English", targets, history: [record] });
+  assert.deepEqual(state.stepsTaken[0].effect, { screenChanged: true, changedAtControl: true });
+}
 
 console.log("test-act: ok");

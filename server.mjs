@@ -22,12 +22,16 @@ import {
 import { isFastStep } from "./batch-plan.mjs";
 import { staleSimEyesSessions } from "./stale-sessions.mjs";
 import { resolveLabel } from "./resolve-label.mjs";
+import { needsOcr, ocrTargets, recognizeText, screenDiff } from "./ocr.mjs";
 import {
   ACT_CONFIDENCE_MIN,
   ACT_DEFAULT_STEPS,
   ACT_DONE_MIN,
   ACT_MAX_STEPS,
+  EFFECT_BAND,
   decideStep,
+  effectRecord,
+  effectText,
   screenSignature,
   stepRecord,
   typesafeClient,
@@ -36,6 +40,7 @@ import {
   ambiguousLabelNote,
   exactLabelMatches,
   formatTargets,
+  formatTree,
   keyboardDeleteTarget,
   listTargets,
   screenContext,
@@ -333,6 +338,7 @@ async function snapshotTargets() {
     };
   }
   const targets = listTargets(nodes);
+  ctx.lastNodes = nodes;
   ctx.lastTargets = targets;
   ctx.lastScreen = screenContext(nodes);
   return targets;
@@ -592,10 +598,22 @@ function execCmd(cmd, args, timeoutMs = 60000) {
   });
 }
 
+/** The accessibility controls plus the screenshot's text as tap targets. `warning` says why OCR was skipped. */
+async function withOcr(targets) {
+  try {
+    const shot = await captureScreenshot("act-ocr");
+    const found = ocrTargets(await recognizeText(shot.path), targets);
+    return { targets: [...targets, ...found], ocr: true };
+  } catch (err) {
+    return { targets, warning: `OCR failed: ${err.message}` };
+  }
+}
+
 async function runActAction(action) {
   if (action.kind === "tap") {
     await pressPoint(action.target);
-    return `Tapped #${action.target.n} ${action.target.label}`;
+    const via = action.target.ocr ? " (text read from the screenshot)" : "";
+    return `Tapped #${action.target.n} ${action.target.label}${via}`;
   }
   if (action.kind === "type") {
     await fillField(action.target, action.text);
@@ -625,42 +643,86 @@ async function actOn(args) {
   const history = [];
   const log = [];
   const tried = new Set();
+  const notices = new Set();
+  let lastEffect = "";
   const note = (end, done) => ({
     done,
-    note: [`act "${instruction}": ${end}`, ...log.map((h, i) => `  ${i + 1}) ${h}`)].join("\n"),
+    note: [
+      `act "${instruction}": ${end}`,
+      ...[...notices].map((n) => `  note: ${n}`),
+      ...log.map((h, i) => `  ${i + 1}) ${h}`),
+    ].join("\n"),
   });
 
   for (;;) {
-    const targets = await snapshotTargets();
-    const step = await decideStep({ instruction, text, targets, history, client, screen: ctx.screenSize, context: ctx.lastScreen });
+    let targets = await snapshotTargets();
+    const decide = () => decideStep({ instruction, text, targets, history, client, screen: ctx.screenSize, context: ctx.lastScreen, nodes: ctx.lastNodes });
+    const useOcr = async (why) => {
+      const r = await withOcr(targets);
+      if (r.warning) notices.add(r.warning);
+      if (r.ocr) notices.add(`${why}, so screenshot text (OCR) is offered as tap targets`);
+      targets = r.targets;
+    };
+    if (needsOcr(targets)) await useOcr("no control has an accessibility label");
+    let step = await decide();
+    const settled = () => step.doneProbability >= ACT_DONE_MIN || (step.action && step.confidence >= ACT_CONFIDENCE_MIN);
+    // Labelled controls can still miss what the goal needs (list rows, ad views): retry once with OCR.
+    if (!settled() && !targets.some((t) => t.ocr)) {
+      await useOcr("the accessibility controls did not cover the goal");
+      step = await decide();
+    }
     const doneP = step.doneProbability.toFixed(2);
     if (process.env.SIM_EYES_ACT_DUMP) {
       // Replayable decision states for eval-act.mjs.
       await appendFile(
         process.env.SIM_EYES_ACT_DUMP,
-        JSON.stringify({ instruction, text, targets, history, screen: ctx.screenSize, context: ctx.lastScreen, step: { ...step, action: undefined } }) + "\n"
+        JSON.stringify({ instruction, text, targets, history, screen: ctx.screenSize, context: ctx.lastScreen, nodes: ctx.lastNodes, step: { ...step, action: undefined } }) + "\n"
       );
     }
     if (step.doneProbability >= ACT_DONE_MIN) {
       return note(`done after ${history.length} step(s) (done p=${doneP}).`, true);
     }
+    const acted = history.length > 0;
+    // Taken steps whose result the screen's controls and text cannot confirm (a checkmark, a switch).
+    const unconfirmed = (why) =>
+      note(
+        `acted but not confirmed (${why}). ${history.length} step(s) taken${
+          lastEffect ? `; the last one ${lastEffect}` : ""
+        }. The goal could not be confirmed from the controls or text on screen: check the screenshot.`,
+        false
+      );
     if (history.length >= maxSteps) {
-      return note(`not done after ${maxSteps} step(s) (done p=${doneP}). Look at the screen and continue with explicit steps.`, false);
+      return unconfirmed(`done p=${doneP} after ${maxSteps} step(s)`);
     }
     if (!step.action || step.confidence < ACT_CONFIDENCE_MIN) {
       const why = step.action
         ? `unsure of the next step (${step.key}, confidence ${step.confidence.toFixed(2)})`
         : "no action on this screen helps";
-      return note(`stopped, ${why}. Pass explicit steps or a clearer instruction.`, false);
+      if (acted) return unconfirmed(why);
+      return note(
+        `stopped, ${why}. Pass explicit steps or a clearer instruction. If the control appears after a delay (an ad's Close button, a loading screen), \`wait\` and run act again.`,
+        false
+      );
     }
     const attempt = `${screenSignature(targets)}#${step.key}`;
     if (tried.has(attempt)) {
       return note(`stuck: "${step.key}" again on an unchanged screen.`, false);
     }
     tried.add(attempt);
-    history.push(stepRecord(step.action, ctx.lastScreen?.title));
+    const record = stepRecord(step.action, ctx.lastScreen?.title, ctx.lastScreen?.page);
+    history.push(record);
+    const measure = step.action.kind === "tap";
+    const before = measure ? await captureScreenshot("act-before") : null;
     const done = await runActAction(step.action);
-    log.push(`${done} (confidence ${step.confidence.toFixed(2)})`);
+    lastEffect = "";
+    if (measure) {
+      const after = await captureScreenshot("act-after");
+      const y = step.action.target.y;
+      const effect = effectRecord(await screenDiff(before.path, after.path, [y - EFFECT_BAND, y + EFFECT_BAND]));
+      record.effect = effect;
+      lastEffect = effectText(effect);
+    }
+    log.push(`${done} (confidence ${step.confidence.toFixed(2)})${lastEffect ? `, ${lastEffect}` : ""}`);
   }
 }
 
@@ -697,25 +759,28 @@ Each action is one object: { "tool": "<name>", ...args }. Optional on every acti
 
 | tool | Use when | Arguments (besides save) |
 | --- | --- | --- |
-| look | Refresh screenshot + numbered controls without tapping | (none) |
+| look | Refresh screenshot + numbered controls without tapping | optional tree:true to also print the accessibility view hierarchy (which controls are listed, and which are not) |
 | open | Bring an app to the front (launches it if not running) | name (display name or bundle id); optional relaunch:true to restart it first |
-| tap | Target is known from the last step's control list | index (from list), or label, or x + y |
+| tap | Target is in the last step's control list, or you can read its x + y off the screenshot | index (from list), or label, or x + y |
 | swipe | Scroll or page | direction: up, down, left, or right |
 | drag | Custom pan gesture | x1, y1, x2, y2 (points) |
 | type | Enter text in a known field | text + index or label; optional replace:true (replace whole field) |
 | press | Keyboard key (not a row with the same name) | key: search, return, delete, or dismiss |
 | record | Screen capture to mp4 | action: start or stop (stop also returns contact sheet / frames) |
 | wait | Animation or load time | ms (0–10000) |
-| act | Screen is unpredictable — do not guess tap/type | instruction (required); optional text (only text act may type); optional max_steps (default ${ACT_DEFAULT_STEPS}, max ${ACT_MAX_STEPS}) |
+| act | Screen or target is unknown: alerts, lists, ad or web views, controls missing from the list | instruction (required); optional text (only text act may type); optional max_steps (default ${ACT_DEFAULT_STEPS}, max ${ACT_MAX_STEPS}) |
 
 Rules:
 - Queue long batches: put a whole flow (often 10–20 steps) in ONE batch, not one or two steps per call. Every extra call costs a full round-trip plus your own turn; queued steps cost only their gesture. Split only where you must read the screen to decide the next step.
 - Write flows as step → wait → step (e.g. tap → wait 700 → tap → wait 700 → look with save). A step followed by wait skips agent-device's settle, and mid-batch steps skip the snapshot + screenshot unless they are look, have save, or are followed by an index step.
 - Add { "tool": "look", "save": "…png" } inside the batch wherever you need evidence; you get the final screenshot for free.
 - index/label always refer to the control list from the step before. Prefer label for named controls and x + y for list rows whose label is generic ("Button").
-- The batch stops on the first error, ambiguous label (two indexes share a label), skipped tap/type, or act stuck/skipped. Remaining queued steps are not run — continue in a new batch.
-- Unpredictable UI (permissions, alerts, lists you have not seen): use act, read the step log + final screenshot, then batch explicit tap/type steps.
-- act repeats look → TypeSafe picks one action → run until goal met, max_steps, low confidence, no helpful action, or same action on an unchanged screen. Needs TYPESAFE_API_KEY.`;
+- The batch stops on the first error, ambiguous label (two indexes share a label), skipped tap/type, or an act that is not done (stuck, stopped, or acted but not confirmed). Remaining queued steps are not run — continue in a new batch.
+- tap or act? If the control list already shows the target, use tap with index or label: it is exact, needs no model call and is safe to queue. If the screen is unknown or the target is not listed, use act. For an icon-only button (no text), read its position off the screenshot and use tap x + y.
+- Give each act one goal ("select English", not "finish onboarding") and max_steps 2–4. After a transition or an alert, put a wait before the act.
+- act loop: look → TypeSafe picks one action → run it → repeat. It stops when the goal is met, max_steps is reached, confidence is low, nothing helps, or the same action repeats on an unchanged screen. Needs TYPESAFE_API_KEY.
+- act sees the accessibility controls. When no control has a label, or none of them gets it anywhere, it also reads the screenshot's text (OCR) and offers each text block as a tap target. After every tap it compares the screen before and after and tells TypeSafe whether it changed at the tapped control, which is how a checkmark or switch is confirmed.
+- Read the act result, not just the last screenshot: "done" means the goal was confirmed; "acted but not confirmed" means steps ran and the last one's effect is stated (changed at the control, changed elsewhere, or no effect), so look at the screenshot before continuing; "stopped" or "stuck" means nothing useful was done.`;
 
 const INSTRUCTIONS = `sim-eyes drives one leased iOS simulator per session_id. ${SESSION_ID_RULE}
 
@@ -846,6 +911,10 @@ Response: one log line per completed step, then the final screenshot (image) and
                 relaunch: {
                   type: "boolean",
                   description: "open: true terminates the app first and starts it fresh (default false: keep a running app).",
+                },
+                tree: {
+                  type: "boolean",
+                  description: "look: true also prints the accessibility view hierarchy, tagging each tappable node with its control number or [not listed].",
                 },
                 action: {
                   type: "string",
@@ -1011,7 +1080,8 @@ async function handleToolCore(name, args) {
 
     if (name === "look") {
       const payload = await lookPayload();
-      return respond(payload.text, payload, args.save);
+      const tree = args.tree === true ? `\n\nView hierarchy:\n${formatTree(ctx.lastNodes, ctx.lastTargets)}` : "";
+      return respond(payload.text + tree, payload, args.save);
     }
 
     if (name === "open") {

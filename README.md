@@ -41,7 +41,7 @@ Every action goes through one tool, `batch`, which takes an array of actions. **
 
 | Action `tool` | Arguments |
 | --- | --- |
-| `look` | optional `save` |
+| `look` | optional `save`, optional `tree: true` (also prints the accessibility view hierarchy; each tappable node shows its control number or `[not listed]`) |
 | `open` | `name` (app name or bundle id); keeps a running app unless `relaunch: true` |
 | `tap` | `index` from the last look, `label`, or `x` and `y` |
 | `swipe` | `direction`: `up`, `down`, `left`, `right` |
@@ -58,11 +58,17 @@ Actions run in order. An `index` refers to the look taken after the previous ste
 
 `act` takes a goal such as `"allow notifications if asked"` or `"open Privacy & Security settings"`. Each round it reads the controls on screen and asks TypeSafe (`TYPESAFE_API_KEY`) two questions in one request: is the goal already met, and which single action comes next (tap a control, fill a field, swipe, return, dismiss keyboard, or none). Code runs that action and repeats. It never invents text: it can only fill a field with the `text` you pass.
 
+When no control on screen has an accessibility label (custom-drawn or web views), `act` also runs Apple Vision OCR on the screenshot (`ocr.swift`, compiled to `~/.local/sim-eyes/bin/ocr` on first use, which takes about 30 s) and offers each recognized text as a tap target, marked as read from the screenshot. If any control has a label, OCR is not run. Icon-only buttons have no text, so use `tap` with `x` and `y` for them. If OCR fails, the `act` result says so.
+
+After every tap, `act` compares screenshots from before and after (`ocr --diff`, ignoring the status bar) and reports whether the screen changed and whether it changed in the tapped control's rows. TypeSafe sees this as the step's `effect`, so a checkmark or switch that no control or text shows still confirms "select / toggle X". Result wording: `done` (goal confirmed); `acted but not confirmed` (steps were taken, the goal could not be confirmed, and the last step's effect is stated: check the screenshot); `stopped` or `stuck` (nothing useful was done).
+
 TypeSafe also sees the navigation title, where Back leads, any open alert, and the steps already taken. It stops as done when the goal is met with probability 0.7 or more (a conditional goal whose condition does not hold is met with 0 steps). It stops the queue as skipped when TypeSafe picks none, its confidence is below 0.7, the same action repeats on an unchanged screen, or `max_steps` runs out. The result lists every step it took with its confidence.
 
 ```json
 { "actions": [{ "tool": "open", "name": "Settings" }, { "tool": "act", "instruction": "open Privacy & Security settings" }] }
 ```
+
+The control list leaves out controls agent-device marks as covered by another view, and a consent web dialog left in the tree after it closed (it is a leftover when the app's own views appear beside it; a dialog that is really shown is the only thing in the tree). `act` also sends TypeSafe the view hierarchy.
 
 `look` numbers every control and, for a text field, prints `placeholder` and `value` when they differ from the label. `tap` and `type` accept that `index`, so the control you saw is the one that is pressed. A label shared by two controls is not pressed; the reply lists the indexes. `type` with `replace: true` sets the whole field. `press` sends a keyboard key (`search` and `return` submit, `dismiss` hides the keyboard, `delete` is the keyboard delete key) and does not match a row with the same name. Coordinates are points. Screenshots are 1x.
 

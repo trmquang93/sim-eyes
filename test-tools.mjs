@@ -42,6 +42,10 @@ try {
   const batch = tools.find((t) => t.name === "batch");
   assert.match(batch.description, /\| tool \| Use when \|/);
   assert.match(batch.description, /\| act \|/);
+  // Agents must be told when tap beats act, and that "acted but not confirmed" is not a failure or a success.
+  assert.match(batch.description, /tap or act\?/);
+  assert.match(batch.description, /icon-only button/);
+  assert.match(batch.description, /acted but not confirmed/);
   // Agents must be told to queue whole flows; one-step batches are the main cause of slow QA.
   assert.match(batch.description, /Queue long batches/);
   assert.match(init.result.instructions, /Queue long batches/);
