@@ -42,6 +42,9 @@ try {
   const batch = tools.find((t) => t.name === "batch");
   assert.match(batch.description, /\| tool \| Use when \|/);
   assert.match(batch.description, /\| act \|/);
+  // Agents must be told to queue whole flows; one-step batches are the main cause of slow QA.
+  assert.match(batch.description, /Queue long batches/);
+  assert.match(init.result.instructions, /Queue long batches/);
   assert.deepEqual(batch.inputSchema.required, ["actions"]);
   assert.ok(batch.inputSchema.properties.session_id);
   assert.ok(batch.inputSchema.properties.actions.items.properties.tool.enum.includes("act"));

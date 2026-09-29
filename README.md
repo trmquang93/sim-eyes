@@ -31,7 +31,7 @@ Also install/use the **sim-pool** skill. Set `SIM_POOL_BIN` if it is not under `
 
 Only steps someone reads take a snapshot and screenshot: the last step, `look`, steps with `save`, and steps followed by an `index` action. A tap, type or press followed by `wait` skips agent-device's `--settle`, so write flows as step → `wait` → step.
 
-Every action goes through one tool, `batch`, which takes an array of actions. Pass one action or queue several to save round-trips. Calling `tap`, `look` and the other action names directly returns an error that points to `batch`.
+Every action goes through one tool, `batch`, which takes an array of actions. **Queue long batches:** put a whole flow (often 10–20 steps, with `look` + `save` wherever you need evidence) in one call instead of one or two steps per call. Each extra call costs a round-trip and an agent turn; queued steps cost only their gesture. Split only where the next step depends on reading the screen. Calling `tap`, `look` and the other action names directly returns an error that points to `batch`.
 
 ```json
 { "actions": [{ "tool": "tap", "label": "Files" }, { "tool": "wait", "ms": 300 }, { "tool": "tap", "index": 3, "save": "shot.png" }] }

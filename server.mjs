@@ -704,7 +704,10 @@ Each action is one object: { "tool": "<name>", ...args }. Optional on every acti
 | act | Screen is unpredictable — do not guess tap/type | instruction (required); optional text (only text act may type); optional max_steps (default ${ACT_DEFAULT_STEPS}, max ${ACT_MAX_STEPS}) |
 
 Rules:
-- Queue predictable steps in one batch (e.g. open → wait → tap → type → press). index/label always refer to the control list from the step before.
+- Queue long batches: put a whole flow (often 10–20 steps) in ONE batch, not one or two steps per call. Every extra call costs a full round-trip plus your own turn; queued steps cost only their gesture. Split only where you must read the screen to decide the next step.
+- Write flows as step → wait → step (e.g. tap → wait 700 → tap → wait 700 → look with save). A step followed by wait skips agent-device's settle, and mid-batch steps skip the snapshot + screenshot unless they are look, have save, or are followed by an index step.
+- Add { "tool": "look", "save": "…png" } inside the batch wherever you need evidence; you get the final screenshot for free.
+- index/label always refer to the control list from the step before. Prefer label for named controls and x + y for list rows whose label is generic ("Button").
 - The batch stops on the first error, ambiguous label (two indexes share a label), skipped tap/type, or act stuck/skipped. Remaining queued steps are not run — continue in a new batch.
 - Unpredictable UI (permissions, alerts, lists you have not seen): use act, read the step log + final screenshot, then batch explicit tap/type steps.
 - act repeats look → TypeSafe picks one action → run until goal met, max_steps, low confidence, no helpful action, or same action on an unchanged screen. Needs TYPESAFE_API_KEY.`;
@@ -715,7 +718,7 @@ First acquire or batch in a chat: omit session_id; the response begins with sess
 
 ${BATCH_ACTION_CATALOG}
 
-Example: { "actions": [{ "tool": "open", "name": "VideoTools" }, { "tool": "wait", "ms": 1500 }, { "tool": "act", "instruction": "allow notifications if a system dialog appears" }] }`;
+Example (one call for a whole flow): { "actions": [{ "tool": "tap", "label": "Settings" }, { "tool": "wait", "ms": 700 }, { "tool": "look", "save": "evidence/settings.png" }, { "tool": "tap", "label": "Files" }, { "tool": "wait", "ms": 700 }, { "tool": "tap", "x": 201, "y": 212 }, { "tool": "wait", "ms": 1500 }, { "tool": "look", "save": "evidence/player.png" }, { "tool": "tap", "label": "Close player" }, { "tool": "wait", "ms": 600 }, { "tool": "act", "instruction": "dismiss any alert" }] }`;
 
 const server = new Server(
   { name: "sim-eyes", version: "1.3.0" },
@@ -726,7 +729,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: "acquire",
-      description: `Lease one simulator for this session_id via sim-pool (no UDID in mcp.json). ${SESSION_ID_RULE} Optional prefer_udid / prefer_device on the tool args only. rebind:true switches simulators for this session_id.`,
+      description: `Lease one simulator for this session_id via sim-pool (no UDID in mcp.json). ${SESSION_ID_RULE} Optional prefer_udid / prefer_device on the tool args only. Pass app (name or bundle id) to attach to the app under test without relaunching it. rebind:true switches simulators for this session_id.`,
       inputSchema: {
         type: "object",
         properties: {
