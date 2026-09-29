@@ -47,6 +47,11 @@ try {
   assert.ok(batch.inputSchema.properties.actions.items.properties.tool.enum.includes("act"));
   assert.match(batch.inputSchema.properties.actions.description, /look, open, tap/);
 
+  // The session's app is chosen by the caller; the server never forces one (or a relaunch) on its own.
+  assert.equal(tools.find((t) => t.name === "acquire").inputSchema.properties.app.type, "string");
+  assert.equal(batch.inputSchema.properties.app.type, "string");
+  assert.equal(batch.inputSchema.properties.actions.items.properties.relaunch.type, "boolean");
+
   const statusTool = tools.find((t) => t.name === "status");
   assert.deepEqual(statusTool.inputSchema.required, ["session_id"]);
 

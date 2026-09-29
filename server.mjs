@@ -8,7 +8,7 @@
  * - Renew on every tool call; release on process exit
  * - Per-session screenshot work dir
  */
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { appendFile, copyFile, mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -19,6 +19,8 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { isFastStep } from "./batch-plan.mjs";
+import { staleSimEyesSessions } from "./stale-sessions.mjs";
 import { resolveLabel } from "./resolve-label.mjs";
 import {
   ACT_CONFIDENCE_MIN,
@@ -89,7 +91,24 @@ function adCommand() {
     return ["/opt/homebrew/bin/agent-device"];
   if (existsSync("/usr/local/bin/agent-device"))
     return ["/usr/local/bin/agent-device"];
-  return ["npx", "-y", "agent-device"];
+  const bin = npxAgentDevice();
+  return bin === "npx" ? ["npx", "-y", "agent-device"] : [bin];
+}
+
+let cachedNpxBin = null;
+/** Resolve npx's agent-device binary once: going through `npx` on every call adds ~1 s per step. */
+function npxAgentDevice() {
+  if (cachedNpxBin) return cachedNpxBin;
+  try {
+    const out = execFileSync("npx", ["-y", "-p", "agent-device", "sh", "-c", "command -v agent-device"], {
+      encoding: "utf8",
+      timeout: 120000,
+    }).trim();
+    if (out && existsSync(out)) cachedNpxBin = out;
+  } catch {
+    /* fall through to plain npx */
+  }
+  return cachedNpxBin ?? "npx";
 }
 
 function spawnAd(argv, { json = false, timeoutMs = 120000 } = {}) {
@@ -131,11 +150,25 @@ function usePool() {
   return !!findSimPoolBin();
 }
 
+/** Close agent-device sessions whose sim-eyes process died, so their simulators are usable again. */
+async function sweepStaleSessions() {
+  try {
+    const data = JSON.parse(await spawnAd(["session", "list"], { json: true, timeoutMs: 30000 }));
+    for (const name of staleSimEyesSessions(data.data?.sessions ?? [])) {
+      await spawnAd(["close", "--session", name], { timeoutMs: 30000 }).catch(() => {});
+      console.error(`sim-eyes: closed stale agent-device session ${name}`);
+    }
+  } catch {
+    /* best effort: a failed sweep must not block acquire */
+  }
+}
+
 async function acquireBinding({ preferUdid, preferDevice } = {}) {
   if (ctx.binding) {
     await renewLease(ctx.binding.leaseId).catch(() => {});
     return ctx.binding;
   }
+  await sweepStaleSessions();
 
   const prefer = preferUdid || undefined;
   const preferName = preferDevice || undefined;
@@ -278,7 +311,9 @@ async function runAdJson(args, opts) {
 
 async function ensureApp() {
   if (ctx.appReady) return;
-  await runAd(["open", "Settings", "--relaunch"], { timeoutMs: 180000 });
+  // agent-device needs an app session before it can snapshot. Anchor on the session's app, or on the
+  // home screen. Never relaunch: that would kill an app the caller already started (e.g. from Xcode).
+  await runAd(["open", ctx.app ?? "com.apple.springboard"], { timeoutMs: 180000 });
   ctx.appReady = true;
 }
 
@@ -336,7 +371,14 @@ async function respond(text, payload, save) {
   return toolResult(text + note, payload.image);
 }
 
+/** `--settle` waits ~1.5 s for the UI to go idle; skip it when the batch's next step is an explicit wait. */
+function settleArgs() {
+  return ctx.skipSettle ? [] : ["--settle"];
+}
+
 async function afterMutation() {
+  // Mid-batch steps nobody reads skip the snapshot + screenshot (see batch-plan.mjs).
+  if (ctx.fastStep) return { text: "", image: null, targets: ctx.lastTargets, shotPath: null };
   return lookPayload();
 }
 
@@ -345,7 +387,7 @@ async function pressPoint(target) {
     "press",
     String(target.x),
     String(target.y),
-    "--settle",
+    ...settleArgs(),
   ]);
 }
 
@@ -394,7 +436,7 @@ async function fillField(target, text) {
     String(target.x),
     String(target.y),
     String(text),
-    "--settle",
+    ...settleArgs(),
   ]);
 }
 
@@ -437,12 +479,12 @@ async function typeText(args) {
       return { skipped: false, note: null };
     }
     const escaped = String(args.label).replace(/"/g, '\\"');
-    await runAd(["fill", `label="${escaped}"`, text, "--settle"]);
+    await runAd(["fill", `label="${escaped}"`, text, ...settleArgs()]);
     return { skipped: false, note: null };
   }
 
   if (replace) {
-    await runAd(["fill", "focused=true", text, "--settle"]);
+    await runAd(["fill", "focused=true", text, ...settleArgs()]);
   } else {
     await runAd(["type", text]);
     await runAd(["snapshot", "-i"]);
@@ -638,6 +680,9 @@ function statusText() {
   return lines.join("\n");
 }
 
+const APP_DESCRIPTION =
+  "App (display name or bundle id) this session's first snapshot attaches to, without relaunching it. Default: the home screen. Pass the app you are testing so it is not sent to the background.";
+
 const BATCH_TOOLS = new Set(["look", "open", "tap", "swipe", "drag", "type", "press", "record", "wait", "act"]);
 
 /** Shared catalog for MCP instructions and the batch tool description (keep in sync with README). */
@@ -648,7 +693,7 @@ Each action is one object: { "tool": "<name>", ...args }. Optional on every acti
 | tool | Use when | Arguments (besides save) |
 | --- | --- | --- |
 | look | Refresh screenshot + numbered controls without tapping | (none) |
-| open | Launch or relaunch an app | name (display name or bundle id) |
+| open | Bring an app to the front (launches it if not running) | name (display name or bundle id); optional relaunch:true to restart it first |
 | tap | Target is known from the last step's control list | index (from list), or label, or x + y |
 | swipe | Scroll or page | direction: up, down, left, or right |
 | drag | Custom pan gesture | x1, y1, x2, y2 (points) |
@@ -694,6 +739,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             description: "Simulator display name (resolved to UDID). Ignored when prefer_udid is set.",
           },
+          app: {
+            type: "string",
+            description: APP_DESCRIPTION,
+          },
           rebind: {
             type: "boolean",
             description:
@@ -732,6 +781,10 @@ Response: one log line per completed step, then the final screenshot (image) and
         type: "object",
         properties: {
           ...SESSION_ID_PROPERTY,
+          app: {
+            type: "string",
+            description: APP_DESCRIPTION,
+          },
           actions: {
             type: "array",
             minItems: 1,
@@ -781,6 +834,10 @@ Response: one log line per completed step, then the final screenshot (image) and
                   description: "press: keyboard key (search/return submit, dismiss hides keyboard, delete is backspace).",
                 },
                 name: { type: "string", description: "open: app display name or bundle identifier." },
+                relaunch: {
+                  type: "boolean",
+                  description: "open: true terminates the app first and starts it fresh (default false: keep a running app).",
+                },
                 action: {
                   type: "string",
                   enum: ["start", "stop"],
@@ -845,6 +902,10 @@ async function handleMcpTool(name, rawArgs) {
     sessionId = ctx.id;
     created = resolved.created;
     const args = stripSessionArgs(rawArgs);
+    if (typeof args?.app === "string" && args.app && args.app !== ctx.app) {
+      ctx.app = args.app;
+      ctx.appReady = false;
+    }
 
     let result;
     if (name === "batch") result = await runBatch(args.actions);
@@ -937,7 +998,9 @@ async function handleToolCore(name, args) {
     }
 
     if (name === "open") {
-      await runAd(["open", args.name, "--relaunch"], { timeoutMs: 180000 });
+      await runAd(["open", args.name, ...(args.relaunch === true ? ["--relaunch"] : [])], {
+        timeoutMs: 180000,
+      });
       ctx.appReady = true;
       const payload = await lookPayload();
       return respond(
@@ -969,7 +1032,7 @@ async function handleToolCore(name, args) {
           "press",
           String(Math.round(args.x)),
           String(Math.round(args.y)),
-          "--settle",
+          ...settleArgs(),
         ]);
       } else {
         throw new Error("tap needs index, label, or x and y");
@@ -1087,7 +1150,7 @@ async function handleToolCore(name, args) {
 
     if (name === "act") {
       const result = await actOn(args);
-      const payload = await lookPayload();
+      const payload = await afterMutation();
       const text = `${result.note}\n\n${payload.text}`;
       const response = await respond(text, payload, args.save);
       return result.done ? response : { ...response, skipped: true };
@@ -1137,7 +1200,15 @@ async function runBatch(actions) {
       last = null; // a trailing wait should end on a fresh screenshot
       continue;
     }
-    const result = await handleToolCore(tool, args);
+    ctx.fastStep = isFastStep(actions, i);
+    ctx.skipSettle = actions[i + 1]?.tool === "wait";
+    let result;
+    try {
+      result = await handleToolCore(tool, args);
+    } finally {
+      ctx.fastStep = false;
+      ctx.skipSettle = false;
+    }
     const text = result.content[0]?.text ?? "";
     if (result.isError || result.skipped) {
       const why = result.isError ? "failed" : "skipped";
@@ -1153,7 +1224,7 @@ async function runBatch(actions) {
       tool === "act"
         ? text.split("\n\n")[0]
         : tool === "look" ? `${ctx.lastTargets.length} controls${stepSummary(text).match(/ · Saved .*/)?.[0] ?? ""}` : stepSummary(text);
-    log.push(`${step}: ${summary}`);
+    log.push(`${step}: ${summary || "done"}`);
     last = result;
   }
   if (!last) {
@@ -1197,6 +1268,8 @@ function installExitHooks() {
     releaseAllSessions().finally(() => process.exit(0));
   };
   process.on("SIGINT", cleanup);
+  // MCP clients usually end a server by closing stdin; SIGKILL can't be caught (the sweep covers it).
+  process.stdin.on("end", cleanup);
   process.on("SIGTERM", cleanup);
   process.on("beforeExit", () => {
     releaseAllSessions().catch(() => {});

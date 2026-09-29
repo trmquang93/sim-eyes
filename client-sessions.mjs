@@ -6,6 +6,7 @@ import { randomBytes } from "node:crypto";
  *   lastTargets: import("./targets.mjs").Target[],
  *   lastScreen: object | null,
  *   appReady: boolean,
+ *   app?: string,
  *   recordingPath: string | null,
  *   screenSize: { width: number, height: number },
  *   releasing: boolean,
