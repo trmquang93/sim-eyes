@@ -34,9 +34,17 @@ child.stdout.on("data", (d) => {
   }
 });
 
+const ACTIONS = new Set(["look", "open", "tap", "swipe", "drag", "type", "press", "record"]);
+/** Action tools only exist inside batch; wrap a single one. */
+function toCall(name, args) {
+  return ACTIONS.has(name)
+    ? { name: "batch", arguments: { actions: [{ tool: name, ...args }] } }
+    : { name, arguments: args };
+}
+
 function callTool(name, args = {}) {
   return new Promise((resolve) => {
-    const id = send("tools/call", { name, arguments: args });
+    const id = send("tools/call", toCall(name, args));
     pending.set(id, resolve);
   });
 }

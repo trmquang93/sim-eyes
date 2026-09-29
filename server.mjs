@@ -545,9 +545,11 @@ function statusText() {
   return lines.join("\n");
 }
 
-const INSTRUCTIONS = `sim-eyes drives one leased iOS simulator. Every action returns the next screenshot plus numbered tappable controls, so a separate look is rarely needed. Call release when QA is done.
+const BATCH_TOOLS = new Set(["look", "open", "tap", "swipe", "drag", "type", "press", "record", "wait"]);
 
-tap and type accept index (the number from the last look). That number is the same control look just listed. type replace:true replaces the field instead of appending. press { key: "search"|"return"|"delete"|"dismiss" } hits the keyboard, not a row with the same name. Pass save (a file path) on look or any action to write that screenshot to disk.`;
+const INSTRUCTIONS = `sim-eyes drives one leased iOS simulator. Every action goes through batch, which takes an array of actions (one is fine, several is better). Queue every step you can predict, such as tap, wait, type, press, tap, instead of one call each. The result is one line per step plus the final screenshot and numbered tappable controls, so a separate look is rarely needed. Call release when QA is done.
+
+An index in a step refers to the controls listed after the previous step. type replace:true replaces the field instead of appending. press { key: "search"|"return"|"delete"|"dismiss" } hits the keyboard, not a row with the same name. Pass save (a file path) on any step to write that screenshot to disk. The queue stops at the first error or ambiguous label, so put steps that depend on an unpredictable screen in the next call.`;
 
 const server = new Server(
   { name: "sim-eyes", version: "1.2.0" },
@@ -581,117 +583,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: { type: "object", properties: {} },
     },
     {
-      name: "look",
-      description:
-        "Screenshot of the frontmost simulator app plus numbered tappable controls. Each line includes a text field's placeholder and value when they differ from its label. Pass index from this list to tap or type. Optional save writes the PNG to that path.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          save: {
-            type: "string",
-            description: "File path for this screenshot. Relative paths use the process cwd.",
-          },
-        },
-      },
-    },
-    {
-      name: "open",
-      description: "Launch an app by name or bundle id, then return look output.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          name: { type: "string" },
-          save: { type: "string", description: "File path for the screenshot after launch." },
-        },
-        required: ["name"],
-      },
-    },
-    {
-      name: "tap",
-      description:
-        "Tap a control by index from the last look, by label, or by x/y. One label shared by several controls is not tapped; the result lists their indexes. Returns the next screenshot.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          index: { type: "number", description: "Number from the last look." },
-          label: { type: "string" },
-          x: { type: "number" },
-          y: { type: "number" },
-          save: { type: "string", description: "File path for the screenshot after the tap." },
-        },
-      },
-    },
-    {
-      name: "swipe",
-      description:
-        "Swipe up, down, left, or right across the screen. Returns the next screenshot.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          direction: {
-            type: "string",
-            enum: ["up", "down", "left", "right"],
-          },
-          save: { type: "string", description: "File path for the screenshot after the swipe." },
-        },
-        required: ["direction"],
-      },
-    },
-    {
-      name: "drag",
-      description:
-        "Slow press-and-drag between two points from look. Returns the next screenshot.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          x1: { type: "number" },
-          y1: { type: "number" },
-          x2: { type: "number" },
-          y2: { type: "number" },
-          save: { type: "string", description: "File path for the screenshot after the drag." },
-        },
-        required: ["x1", "y1", "x2", "y2"],
-      },
-    },
-    {
-      name: "type",
-      description:
-        "Type into a field by index from the last look, by label, or into the focused field when both are omitted. replace:true sets the whole value (fill). Otherwise text is appended. Returns the next screenshot.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          text: { type: "string" },
-          index: { type: "number", description: "Field number from the last look." },
-          label: { type: "string" },
-          replace: {
-            type: "boolean",
-            description: "Replace the field value instead of appending.",
-          },
-          save: { type: "string", description: "File path for the screenshot after typing." },
-        },
-        required: ["text"],
-      },
-    },
-    {
-      name: "press",
-      description:
-        "Press a keyboard key without matching an on-screen label. search and return submit the focused field. dismiss hides the keyboard. delete taps the keyboard delete key from the last look, not an app button named Delete. Returns the next screenshot.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          key: {
-            type: "string",
-            enum: ["search", "return", "delete", "dismiss"],
-          },
-          save: { type: "string", description: "File path for the screenshot after the key." },
-        },
-        required: ["key"],
-      },
-    },
-    {
       name: "batch",
       description:
-        "Run several actions in one call, in order: each item is {tool, ...that tool's args} for look, open, tap, swipe, drag, type, press, or record, plus {tool:\"wait\", ms}. An index refers to the look taken after the previous step. Stops at the first error or skipped tap/type. Returns one line per step and the final screenshot; pass save on a step to keep its screenshot.",
+        "The only way to act on the simulator. Takes an array of actions and runs them in order; pass one action or queue several (e.g. tap, wait, type, press, tap) to save round-trips. Each item is {tool, ...args}: look {save}, open {name}, tap {index | label | x,y}, swipe {direction}, drag {x1,y1,x2,y2}, type {text, index | label, replace}, press {key: search|return|delete|dismiss}, record {action: start|stop}, wait {ms}. An index refers to the look taken after the previous step, so queue steps whose targets you already know; look again when a step changes the screen in ways you cannot predict. Stops at the first error or skipped tap/type. Returns one line per step and the final screenshot with numbered controls; pass save on a step to keep its screenshot.",
       inputSchema: {
         type: "object",
         properties: {
@@ -700,7 +594,46 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             minItems: 1,
             items: {
               type: "object",
-              properties: { tool: { type: "string" } },
+              properties: {
+                tool: {
+                  type: "string",
+                  enum: [...BATCH_TOOLS],
+                },
+                index: { type: "number", description: "tap/type: number from the last look." },
+                label: { type: "string", description: "tap/type: control label." },
+                x: { type: "number", description: "tap: x point." },
+                y: { type: "number", description: "tap: y point." },
+                x1: { type: "number", description: "drag: start x." },
+                y1: { type: "number", description: "drag: start y." },
+                x2: { type: "number", description: "drag: end x." },
+                y2: { type: "number", description: "drag: end y." },
+                direction: {
+                  type: "string",
+                  enum: ["up", "down", "left", "right"],
+                  description: "swipe: direction.",
+                },
+                text: { type: "string", description: "type: text to enter." },
+                replace: {
+                  type: "boolean",
+                  description: "type: replace the field value instead of appending.",
+                },
+                key: {
+                  type: "string",
+                  enum: ["search", "return", "delete", "dismiss"],
+                  description: "press: keyboard key.",
+                },
+                name: { type: "string", description: "open: app name or bundle id." },
+                action: {
+                  type: "string",
+                  enum: ["start", "stop"],
+                  description: "record: start or stop.",
+                },
+                ms: { type: "number", description: "wait: milliseconds (max 10000)." },
+                save: {
+                  type: "string",
+                  description: "File path for this step's screenshot. Relative paths use the process cwd.",
+                },
+              },
               required: ["tool"],
             },
           },
@@ -708,23 +641,22 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["actions"],
       },
     },
-    {
-      name: "record",
-      description:
-        'Start or stop screen recording. Stop returns changed frames from the clip with timestamps.',
-      inputSchema: {
-        type: "object",
-        properties: {
-          action: { type: "string", enum: ["start", "stop"] },
-        },
-        required: ["action"],
-      },
-    },
   ],
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+  if (BATCH_TOOLS.has(name)) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Error: "${name}" is not a tool. Call batch with actions: [{"tool": "${name}", ...args}]. You can queue several actions in one call.`,
+        },
+      ],
+      isError: true,
+    };
+  }
   const result = await handleTool(name, args ?? {});
   delete result.poolBusy;
   delete result.skipped;
@@ -933,8 +865,6 @@ async function handleTool(name, args) {
     };
   }
 }
-
-const BATCH_TOOLS = new Set(["look", "open", "tap", "swipe", "drag", "type", "press", "record", "wait"]);
 
 /** First line of a step's text plus any "Saved" line; the full target list is only shown for the last step. */
 function stepSummary(text) {
