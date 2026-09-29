@@ -311,9 +311,14 @@ async function runAdJson(args, opts) {
 
 async function ensureApp() {
   if (ctx.appReady) return;
-  // agent-device needs an app session before it can snapshot. Anchor on the session's app, or on the
-  // home screen. Never relaunch: that would kill an app the caller already started (e.g. from Xcode).
-  await runAd(["open", ctx.app ?? "com.apple.springboard"], { timeoutMs: 180000 });
+  if (typeof ctx.app !== "string" || !ctx.app.trim()) {
+    throw new Error(
+      "batch/acquire requires app (display name or bundle id). Omitting it attaches to the home screen and backgrounds the app under test."
+    );
+  }
+  // agent-device needs an app session before it can snapshot. Open the caller's app without
+  // relaunching: a relaunch would kill an app they already started (e.g. from Xcode).
+  await runAd(["open", ctx.app], { timeoutMs: 180000 });
   ctx.appReady = true;
 }
 
@@ -681,7 +686,7 @@ function statusText() {
 }
 
 const APP_DESCRIPTION =
-  "App (display name or bundle id) this session's first snapshot attaches to, without relaunching it. Default: the home screen. Pass the app you are testing so it is not sent to the background.";
+  "Required. Display name or bundle id this session attaches to, without relaunching it. Omitting it attaches to the home screen and backgrounds the app under test.";
 
 const BATCH_TOOLS = new Set(["look", "open", "tap", "swipe", "drag", "type", "press", "record", "wait", "act"]);
 
@@ -718,10 +723,10 @@ First acquire or batch in a chat: omit session_id; the response begins with sess
 
 ${BATCH_ACTION_CATALOG}
 
-Example (one call for a whole flow): { "actions": [{ "tool": "tap", "label": "Settings" }, { "tool": "wait", "ms": 700 }, { "tool": "look", "save": "evidence/settings.png" }, { "tool": "tap", "label": "Files" }, { "tool": "wait", "ms": 700 }, { "tool": "tap", "x": 201, "y": 212 }, { "tool": "wait", "ms": 1500 }, { "tool": "look", "save": "evidence/player.png" }, { "tool": "tap", "label": "Close player" }, { "tool": "wait", "ms": 600 }, { "tool": "act", "instruction": "dismiss any alert" }] }`;
+Example (one call for a whole flow): { "app": "com.example.app", "actions": [{ "tool": "tap", "label": "Settings" }, { "tool": "wait", "ms": 700 }, { "tool": "look", "save": "evidence/settings.png" }, { "tool": "tap", "label": "Files" }, { "tool": "wait", "ms": 700 }, { "tool": "tap", "x": 201, "y": 212 }, { "tool": "wait", "ms": 1500 }, { "tool": "look", "save": "evidence/player.png" }, { "tool": "tap", "label": "Close player" }, { "tool": "wait", "ms": 600 }, { "tool": "act", "instruction": "dismiss any alert" }] }`;
 
 const server = new Server(
-  { name: "sim-eyes", version: "1.3.0" },
+  { name: "sim-eyes", version: "1.3.1" },
   { capabilities: { tools: {} }, instructions: INSTRUCTIONS }
 );
 
@@ -729,7 +734,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: "acquire",
-      description: `Lease one simulator for this session_id via sim-pool (no UDID in mcp.json). ${SESSION_ID_RULE} Optional prefer_udid / prefer_device on the tool args only. Pass app (name or bundle id) to attach to the app under test without relaunching it. rebind:true switches simulators for this session_id.`,
+      description: `Lease one simulator for this session_id via sim-pool (no UDID in mcp.json). ${SESSION_ID_RULE} app is required (name or bundle id): the session attaches to that app without relaunching it. Optional prefer_udid / prefer_device on the tool args only. rebind:true switches simulators for this session_id.`,
       inputSchema: {
         type: "object",
         properties: {
@@ -752,6 +757,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
               "When this session_id is already bound: release its lease and acquire again (honors prefer_*).",
           },
         },
+        required: ["app"],
       },
     },
     {
@@ -865,7 +871,7 @@ Response: one log line per completed step, then the final screenshot (image) and
             },
           },
         },
-        required: ["actions"],
+        required: ["app", "actions"],
       },
     },
   ],
@@ -896,6 +902,14 @@ async function handleMcpTool(name, rawArgs) {
   /** @type {import("./client-sessions.mjs").ClientSession | null} */
   let callCtx = null;
   try {
+    if (name === "acquire" || name === "batch") {
+      const app = rawArgs?.app;
+      if (typeof app !== "string" || !app.trim()) {
+        throw new Error(
+          `${name} requires app (display name or bundle id). Omitting it attaches to the home screen and backgrounds the app under test.`
+        );
+      }
+    }
     const resolved = registry.resolve(rawArgs?.session_id, {
       allowCreate: name === "acquire" || name === "batch",
       toolName: name,

@@ -20,7 +20,7 @@ Unit tests use `scripts/run-unit-tests.sh` (separate lease), not the UI chat's `
 
 | Tool | Purpose |
 | --- | --- |
-| `acquire` | Lease an exclusive UDID (optional `prefer_udid` / `prefer_device`, and `app`: the app the session attaches to without relaunching it; default is the home screen). Also closes agent-device sessions left by dead sim-eyes processes. |
+| `acquire` | Lease an exclusive UDID. **`app` is required** (display name or bundle id): the session attaches to that app without relaunching it. Optional `prefer_udid` / `prefer_device`. Also closes agent-device sessions left by dead sim-eyes processes. |
 | `release` | Free the lease + close the session when QA ends |
 | `status` | This process binding + host pool table |
 | `batch` | Runs actions; auto-acquires on first use if you forgot `acquire` |
@@ -34,8 +34,10 @@ Only steps someone reads take a snapshot and screenshot: the last step, `look`, 
 Every action goes through one tool, `batch`, which takes an array of actions. **Queue long batches:** put a whole flow (often 10–20 steps, with `look` + `save` wherever you need evidence) in one call instead of one or two steps per call. Each extra call costs a round-trip and an agent turn; queued steps cost only their gesture. Split only where the next step depends on reading the screen. Calling `tap`, `look` and the other action names directly returns an error that points to `batch`.
 
 ```json
-{ "actions": [{ "tool": "tap", "label": "Files" }, { "tool": "wait", "ms": 300 }, { "tool": "tap", "index": 3, "save": "shot.png" }] }
+{ "app": "com.example.app", "actions": [{ "tool": "tap", "label": "Files" }, { "tool": "wait", "ms": 300 }, { "tool": "tap", "index": 3, "save": "shot.png" }] }
 ```
+
+`app` is required on every `acquire` and `batch`. Without it the session used to attach to the home screen and send the app under test to the background.
 
 | Action `tool` | Arguments |
 | --- | --- |

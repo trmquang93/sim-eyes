@@ -25,7 +25,7 @@ function rpc(method, params) {
   return new Promise((resolve) => pending.set(id, resolve));
 }
 async function batch(actions) {
-  const res = (await rpc("tools/call", { name: "batch", arguments: { actions } })).result;
+  const res = (await rpc("tools/call", { name: "batch", arguments: { app: "Settings", actions } })).result;
   const text = res.content[0].text;
   return { error: !!res.isError, text };
 }

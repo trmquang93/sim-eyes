@@ -45,13 +45,15 @@ try {
   // Agents must be told to queue whole flows; one-step batches are the main cause of slow QA.
   assert.match(batch.description, /Queue long batches/);
   assert.match(init.result.instructions, /Queue long batches/);
-  assert.deepEqual(batch.inputSchema.required, ["actions"]);
+  assert.deepEqual(batch.inputSchema.required, ["app", "actions"]);
   assert.ok(batch.inputSchema.properties.session_id);
   assert.ok(batch.inputSchema.properties.actions.items.properties.tool.enum.includes("act"));
   assert.match(batch.inputSchema.properties.actions.description, /look, open, tap/);
 
-  // The session's app is chosen by the caller; the server never forces one (or a relaunch) on its own.
-  assert.equal(tools.find((t) => t.name === "acquire").inputSchema.properties.app.type, "string");
+  // app is required so the first snapshot cannot attach to SpringBoard and background the app under test.
+  const acquire = tools.find((t) => t.name === "acquire");
+  assert.deepEqual(acquire.inputSchema.required, ["app"]);
+  assert.equal(acquire.inputSchema.properties.app.type, "string");
   assert.equal(batch.inputSchema.properties.app.type, "string");
   assert.equal(batch.inputSchema.properties.actions.items.properties.relaunch.type, "boolean");
 
@@ -68,7 +70,15 @@ try {
     assert.match(res.content[0].text, /Call batch with actions/);
   }
 
-  const bad = (await rpc("tools/call", { name: "batch", arguments: { actions: [{ tool: "nope" }] } })).result;
+  const noApp = (await rpc("tools/call", { name: "batch", arguments: { actions: [{ tool: "look" }] } })).result;
+  assert.equal(noApp.isError, true);
+  assert.match(noApp.content[0].text, /requires app/);
+
+  const noAppAcquire = (await rpc("tools/call", { name: "acquire", arguments: {} })).result;
+  assert.equal(noAppAcquire.isError, true);
+  assert.match(noAppAcquire.content[0].text, /requires app/);
+
+  const bad = (await rpc("tools/call", { name: "batch", arguments: { app: "Settings", actions: [{ tool: "nope" }] } })).result;
   assert.equal(bad.isError, true);
   assert.match(bad.content[0].text, /batch cannot run "nope"/);
 

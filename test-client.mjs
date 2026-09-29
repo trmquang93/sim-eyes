@@ -10,7 +10,7 @@ const ACTIONS = new Set(["look", "open", "tap", "swipe", "drag", "type", "press"
 /** Action tools only exist inside batch; wrap a single one. */
 function toCall(name, args) {
   return ACTIONS.has(name)
-    ? { name: "batch", arguments: { actions: [{ tool: name, ...args }] } }
+    ? { name: "batch", arguments: { app: args.app ?? "Settings", actions: [{ tool: name, ...args }] } }
     : { name, arguments: args };
 }
 
