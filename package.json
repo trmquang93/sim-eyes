@@ -7,7 +7,7 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "test": "node test-pool.mjs && node test-targets.mjs && node test-tools.mjs"
+    "test": "node test-pool.mjs && node test-targets.mjs && node test-tools.mjs && node test-act.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",

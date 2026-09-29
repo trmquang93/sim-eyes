@@ -9,7 +9,7 @@
  * - Per-session screenshot work dir
  */
 import { spawn } from "node:child_process";
-import { copyFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, copyFile, mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
@@ -21,11 +21,22 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { resolveLabel } from "./resolve-label.mjs";
 import {
+  ACT_CONFIDENCE_MIN,
+  ACT_DEFAULT_STEPS,
+  ACT_DONE_MIN,
+  ACT_MAX_STEPS,
+  decideStep,
+  screenSignature,
+  stepRecord,
+  typesafeClient,
+} from "./act.mjs";
+import {
   ambiguousLabelNote,
   exactLabelMatches,
   formatTargets,
   keyboardDeleteTarget,
   listTargets,
+  screenContext,
   targetByIndex,
 } from "./targets.mjs";
 import {
@@ -44,6 +55,8 @@ const WORK_ROOT = join(homedir(), ".local", "sim-eyes", "work");
 let binding = null;
 /** Controls from the last snapshot. `index` on tap/type refers to this list. */
 let lastTargets = [];
+/** screenContext of the last snapshot. */
+let lastScreen = null;
 let recordingPath = null;
 let screenSize = { width: 402, height: 874 };
 let appReady = false;
@@ -275,6 +288,7 @@ async function snapshotTargets() {
   }
   const targets = listTargets(nodes);
   lastTargets = targets;
+  lastScreen = screenContext(nodes);
   return targets;
 }
 
@@ -525,6 +539,78 @@ function execCmd(cmd, args, timeoutMs = 60000) {
   });
 }
 
+async function runActAction(action) {
+  if (action.kind === "tap") {
+    await pressPoint(action.target);
+    return `Tapped #${action.target.n} ${action.target.label}`;
+  }
+  if (action.kind === "type") {
+    await fillField(action.target, action.text);
+    return `Filled #${action.target.n} ${action.target.label}`;
+  }
+  if (action.kind === "swipe") {
+    const [x1, y1, x2, y2] = swipeCoords(action.direction);
+    await runAd(["swipe", String(x1), String(y1), String(x2), String(y2)]);
+    return `Swiped ${action.direction}`;
+  }
+  return pressKey(action.key);
+}
+
+/**
+ * Carry out a plain-language instruction on a screen the agent cannot predict.
+ * Code owns the loop and the stop rules; TypeSafe only judges "done?" and picks the next action.
+ */
+async function actOn(args) {
+  const instruction = String(args.instruction ?? "").trim();
+  if (!instruction) throw new Error("act needs instruction");
+  const client = typesafeClient();
+  const maxSteps = Math.min(
+    Math.max(Math.round(Number(args.max_steps) || ACT_DEFAULT_STEPS), 1),
+    ACT_MAX_STEPS
+  );
+  const text = args.text != null ? String(args.text) : undefined;
+  const history = [];
+  const log = [];
+  const tried = new Set();
+  const note = (end, done) => ({
+    done,
+    note: [`act "${instruction}": ${end}`, ...log.map((h, i) => `  ${i + 1}) ${h}`)].join("\n"),
+  });
+
+  for (;;) {
+    const targets = await snapshotTargets();
+    const step = await decideStep({ instruction, text, targets, history, client, screen: screenSize, context: lastScreen });
+    const doneP = step.doneProbability.toFixed(2);
+    if (process.env.SIM_EYES_ACT_DUMP) {
+      // Replayable decision states for eval-act.mjs.
+      await appendFile(
+        process.env.SIM_EYES_ACT_DUMP,
+        JSON.stringify({ instruction, text, targets, history, screen: screenSize, context: lastScreen, step: { ...step, action: undefined } }) + "\n"
+      );
+    }
+    if (step.doneProbability >= ACT_DONE_MIN) {
+      return note(`done after ${history.length} step(s) (done p=${doneP}).`, true);
+    }
+    if (history.length >= maxSteps) {
+      return note(`not done after ${maxSteps} step(s) (done p=${doneP}). Look at the screen and continue with explicit steps.`, false);
+    }
+    if (!step.action || step.confidence < ACT_CONFIDENCE_MIN) {
+      const why = step.action
+        ? `unsure of the next step (${step.key}, confidence ${step.confidence.toFixed(2)})`
+        : "no action on this screen helps";
+      return note(`stopped, ${why}. Pass explicit steps or a clearer instruction.`, false);
+    }
+    const attempt = `${screenSignature(targets)}#${step.key}`;
+    if (tried.has(attempt)) {
+      return note(`stuck: "${step.key}" again on an unchanged screen.`, false);
+    }
+    tried.add(attempt);
+    history.push(stepRecord(step.action, lastScreen?.title));
+    const done = await runActAction(step.action);
+    log.push(`${done} (confidence ${step.confidence.toFixed(2)})`);
+  }
+}
+
 function statusText() {
   const lines = [
     `instance: ${INSTANCE_ID}`,
@@ -545,11 +631,13 @@ function statusText() {
   return lines.join("\n");
 }
 
-const BATCH_TOOLS = new Set(["look", "open", "tap", "swipe", "drag", "type", "press", "record", "wait"]);
+const BATCH_TOOLS = new Set(["look", "open", "tap", "swipe", "drag", "type", "press", "record", "wait", "act"]);
 
 const INSTRUCTIONS = `sim-eyes drives one leased iOS simulator. Every action goes through batch, which takes an array of actions (one is fine, several is better). Queue every step you can predict, such as tap, wait, type, press, tap, instead of one call each. The result is one line per step plus the final screenshot and numbered tappable controls, so a separate look is rarely needed. Call release when QA is done.
 
-An index in a step refers to the controls listed after the previous step. type replace:true replaces the field instead of appending. press { key: "search"|"return"|"delete"|"dismiss" } hits the keyboard, not a row with the same name. Pass save (a file path) on any step to write that screenshot to disk. The queue stops at the first error or ambiguous label, so put steps that depend on an unpredictable screen in the next call.`;
+An index in a step refers to the controls listed after the previous step. type replace:true replaces the field instead of appending. press { key: "search"|"return"|"delete"|"dismiss" } hits the keyboard, not a row with the same name. Pass save (a file path) on any step to write that screenshot to disk. The queue stops at the first error or ambiguous label, so put steps that depend on an unpredictable screen in the next call.
+
+When you cannot predict the screen (an alert that may or may not appear, a control you have not seen yet), queue act { instruction } instead of guessing. act looks at the screen, lets TypeSafe pick one tap, swipe, key or field fill, and repeats until the instruction is fulfilled or max_steps runs out. act types only the text you pass in text; it never invents text. It stops the queue when it gets stuck.`;
 
 const server = new Server(
   { name: "sim-eyes", version: "1.2.0" },
@@ -585,7 +673,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: "batch",
       description:
-        "The only way to act on the simulator. Takes an array of actions and runs them in order; pass one action or queue several (e.g. tap, wait, type, press, tap) to save round-trips. Each item is {tool, ...args}: look {save}, open {name}, tap {index | label | x,y}, swipe {direction}, drag {x1,y1,x2,y2}, type {text, index | label, replace}, press {key: search|return|delete|dismiss}, record {action: start|stop}, wait {ms}. An index refers to the look taken after the previous step, so queue steps whose targets you already know; look again when a step changes the screen in ways you cannot predict. Stops at the first error or skipped tap/type. Returns one line per step and the final screenshot with numbered controls; pass save on a step to keep its screenshot.",
+        "The only way to act on the simulator. Takes an array of actions and runs them in order; pass one action or queue several (e.g. tap, wait, type, press, tap) to save round-trips. Each item is {tool, ...args}: look {save}, open {name}, tap {index | label | x,y}, swipe {direction}, drag {x1,y1,x2,y2}, type {text, index | label, replace}, press {key: search|return|delete|dismiss}, record {action: start|stop}, wait {ms}, act {instruction, text, max_steps}. act takes a plain-language goal for a screen you cannot predict (e.g. 'allow notifications if asked', 'open the first video') and lets TypeSafe choose each tap, swipe, key or field fill until it is done. An index refers to the look taken after the previous step, so queue steps whose targets you already know; look again when a step changes the screen in ways you cannot predict. Stops at the first error or skipped tap/type. Returns one line per step and the final screenshot with numbered controls; pass save on a step to keep its screenshot.",
       inputSchema: {
         type: "object",
         properties: {
@@ -612,7 +700,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                   enum: ["up", "down", "left", "right"],
                   description: "swipe: direction.",
                 },
-                text: { type: "string", description: "type: text to enter." },
+                text: { type: "string", description: "type: text to enter. act: the only text act may type into a field." },
                 replace: {
                   type: "boolean",
                   description: "type: replace the field value instead of appending.",
@@ -629,6 +717,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                   description: "record: start or stop.",
                 },
                 ms: { type: "number", description: "wait: milliseconds (max 10000)." },
+                instruction: {
+                  type: "string",
+                  description: "act: plain-language goal, e.g. \"dismiss any alert\" or \"open Wi-Fi settings\".",
+                },
+                max_steps: {
+                  type: "number",
+                  description: `act: most actions to take (default ${ACT_DEFAULT_STEPS}, max ${ACT_MAX_STEPS}).`,
+                },
                 save: {
                   type: "string",
                   description: "File path for this step's screenshot. Relative paths use the process cwd.",
@@ -851,6 +947,14 @@ async function handleTool(name, args) {
       throw new Error('record action must be "start" or "stop"');
     }
 
+    if (name === "act") {
+      const result = await actOn(args);
+      const payload = await lookPayload();
+      const text = `${result.note}\n\n${payload.text}`;
+      const response = await respond(text, payload, args.save);
+      return result.done ? response : { ...response, skipped: true };
+    }
+
     throw new Error(`Unknown tool: ${name}`);
   } catch (err) {
     const busy =
@@ -908,7 +1012,9 @@ async function runBatch(actions) {
       };
     }
     const summary =
-      tool === "look" ? `${lastTargets.length} controls${stepSummary(text).match(/ · Saved .*/)?.[0] ?? ""}` : stepSummary(text);
+      tool === "act"
+        ? text.split("\n\n")[0]
+        : tool === "look" ? `${lastTargets.length} controls${stepSummary(text).match(/ · Saved .*/)?.[0] ?? ""}` : stepSummary(text);
     log.push(`${step}: ${summary}`);
     last = result;
   }
@@ -916,7 +1022,8 @@ async function runBatch(actions) {
     const payload = await lookPayload();
     return toolResult(`${log.join("\n")}\n\n${payload.text}`, payload.image);
   }
-  const lastText = last.content[0]?.text ?? "";
+  let lastText = last.content[0]?.text ?? "";
+  if (actions.at(-1)?.tool === "act") lastText = lastText.split("\n\n").slice(1).join("\n\n");
   return {
     content: [
       { type: "text", text: `${log.join("\n")}\n\n${lastText}` },

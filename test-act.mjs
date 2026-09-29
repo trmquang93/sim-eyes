@@ -1,0 +1,105 @@
+import assert from "node:assert/strict";
+import { actOptions, decideStep, screenSignature, stepRecord } from "./act.mjs";
+import { screenContext } from "./targets.mjs";
+
+const targets = [
+  { n: 1, label: "Settings", x: 42, y: 84, editable: false },
+  { n: 2, label: "Search", x: 220, y: 904, editable: true, placeholder: "", value: "" },
+];
+
+// act must never invent text: without text there is no way to fill a field.
+{
+  const { criteria, actions } = actOptions(targets);
+  assert.ok(criteria.none);
+  assert.ok(actions["tap 1"] && actions["tap 2"]);
+  assert.equal(actions["type 2"], undefined);
+  assert.deepEqual(actions["swipe up"], { kind: "swipe", direction: "up" });
+  assert.deepEqual(actions["press dismiss"], { kind: "press", key: "dismiss" });
+  assert.equal(actions.none, undefined);
+}
+
+// With text, only editable fields get a fill option, and it carries exactly the caller's text.
+{
+  const { actions } = actOptions(targets, { text: "Wi-Fi" });
+  assert.equal(actions["type 1"], undefined);
+  assert.deepEqual(actions["type 2"], { kind: "type", target: targets[1], text: "Wi-Fi" });
+}
+
+// A moved control changes the signature, so repeating an action there is not "stuck".
+assert.notEqual(
+  screenSignature(targets),
+  screenSignature([{ ...targets[0], y: 90 }, targets[1]])
+);
+
+// decideStep maps TypeSafe's label back to an executable action and sends both questions in one request.
+{
+  let request;
+  const client = {
+    async systemOne(req) {
+      request = req;
+      return {
+        answers: {
+          done: { type: "noul", noul: 0.1 },
+          next: { type: "choice", choice: "tap 2", confidence: 0.9, probabilities: {} },
+        },
+      };
+    },
+  };
+  const step = await decideStep({ instruction: "search", targets, history: [], client });
+  assert.deepEqual(Object.keys(request.questions).sort(), ["done", "next"]);
+  assert.equal(request.state.instruction, "search");
+  assert.equal(step.doneProbability, 0.1);
+  assert.equal(step.action.kind, "tap");
+  assert.equal(step.action.target.n, 2);
+}
+
+// "none" means no executable action.
+{
+  const client = {
+    async systemOne() {
+      return {
+        answers: {
+          done: { type: "noul", noul: 0.2 },
+          next: { type: "choice", choice: "none", confidence: 0.8, probabilities: {} },
+        },
+      };
+    },
+  };
+  const step = await decideStep({ instruction: "x", targets, history: [], client });
+  assert.equal(step.action, null);
+}
+
+// Controls at one point are one option, so the vote is not split between a cell and its button.
+{
+  const dup = [
+    { n: 1, label: "Apple Account", x: 201, y: 216, editable: false },
+    { n: 2, label: "Apple Account, Sign in", x: 201, y: 216, editable: false },
+    { n: 3, label: "Settings", x: 38, y: 84, editable: false, back: true },
+  ];
+  const { criteria, actions } = actOptions(dup);
+  assert.ok(actions["tap 1"]);
+  assert.equal(actions["tap 2"], undefined);
+  assert.match(criteria["tap 1"], /Apple Account, Sign in/);
+  assert.match(criteria["tap 3"], /Go back to the "Settings" screen/);
+}
+
+// A fill is recorded as not submitted, so "search and submit" is not judged done before return is pressed.
+assert.deepEqual(stepRecord({ kind: "type", target: targets[1], text: "Wi-Fi" }, "Settings"), {
+  action: "fill field",
+  control: "Search",
+  text: "Wi-Fi",
+  submitted: false,
+  onScreen: "Settings",
+});
+
+// The navigation title and Back destination come from the interactive snapshot.
+assert.deepEqual(
+  screenContext([
+    { type: "NavigationBar", identifier: "General" },
+    { type: "Button", label: "Settings", identifier: "BackButton" },
+    { type: "StaticText", label: "General" },
+  ]),
+  { title: "General", backTo: "Settings", alert: null, texts: ["General"] }
+);
+
+console.log("test-act: ok");

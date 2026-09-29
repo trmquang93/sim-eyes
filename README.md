@@ -36,8 +36,19 @@ Every action goes through one tool, `batch`, which takes an array of actions. Pa
 | `press` | `key`: `search`, `return`, `delete`, `dismiss` |
 | `record` | `action`: `start` or `stop` |
 | `wait` | `ms` (max 10000) |
+| `act` | `instruction` (plain language), optional `text`, `max_steps` (default 5, max 10) |
 
 Actions run in order. An `index` refers to the look taken after the previous step. The queue stops at the first error or skipped tap/type, and the result is one line per step plus the final screenshot. Any action accepts `save` to keep its screenshot.
+
+### `act`: when you cannot predict the screen
+
+`act` takes a goal such as `"allow notifications if asked"` or `"open Privacy & Security settings"`. Each round it reads the controls on screen and asks TypeSafe (`TYPESAFE_API_KEY`) two questions in one request: is the goal already met, and which single action comes next (tap a control, fill a field, swipe, return, dismiss keyboard, or none). Code runs that action and repeats. It never invents text: it can only fill a field with the `text` you pass.
+
+TypeSafe also sees the navigation title, where Back leads, any open alert, and the steps already taken. It stops as done when the goal is met with probability 0.7 or more (a conditional goal whose condition does not hold is met with 0 steps). It stops the queue as skipped when TypeSafe picks none, its confidence is below 0.7, the same action repeats on an unchanged screen, or `max_steps` runs out. The result lists every step it took with its confidence.
+
+```json
+{ "actions": [{ "tool": "open", "name": "Settings" }, { "tool": "act", "instruction": "open Privacy & Security settings" }] }
+```
 
 `look` numbers every control and, for a text field, prints `placeholder` and `value` when they differ from the label. `tap` and `type` accept that `index`, so the control you saw is the one that is pressed. A label shared by two controls is not pressed; the reply lists the indexes. `type` with `replace: true` sets the whole field. `press` sends a keyboard key (`search` and `return` submit, `dismiss` hides the keyboard, `delete` is the keyboard delete key) and does not match a row with the same name. Coordinates are points. Screenshots are 1x.
 

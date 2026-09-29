@@ -43,6 +43,8 @@ try {
   const batch = tools.find((t) => t.name === "batch");
   assert.match(batch.description, /one action or queue several/);
   assert.deepEqual(batch.inputSchema.required, ["actions"]);
+  assert.ok(batch.inputSchema.properties.actions.items.properties.tool.enum.includes("act"));
+  assert.match(batch.description, /act \{instruction/);
 
   for (const name of ["tap", "look", "type"]) {
     const res = (await rpc("tools/call", { name, arguments: {} })).result;

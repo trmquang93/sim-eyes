@@ -53,11 +53,35 @@ export function listTargets(nodes) {
       x: c.x,
       y: c.y,
       editable: !!isField,
+      back: node.identifier === "BackButton",
       placeholder: placeholder && placeholder !== label ? placeholder : "",
       value: value && value !== label ? value : "",
     });
   }
   return items;
+}
+
+/**
+ * What the screen is, beyond its controls: navigation title, where Back goes,
+ * an open alert, and a few visible texts. act uses it to judge "already there".
+ */
+export function screenContext(nodes, { maxTexts = 12 } = {}) {
+  const nav = nodes.find((n) => n.type === "NavigationBar");
+  const back = nodes.find((n) => n.identifier === "BackButton");
+  const alert = nodes.find((n) => n.type === "Alert" || n.type === "Sheet");
+  const texts = [];
+  for (const n of nodes) {
+    if (n.type !== "StaticText" || !n.label) continue;
+    const t = clip(n.label, 80);
+    if (!texts.includes(t)) texts.push(t);
+    if (texts.length >= maxTexts) break;
+  }
+  return {
+    title: nav?.identifier || nav?.label || null,
+    backTo: back ? back.label || "previous screen" : null,
+    alert: alert ? alert.label || alert.identifier || "untitled alert" : null,
+    texts,
+  };
 }
 
 export function formatTargetLine(t) {
