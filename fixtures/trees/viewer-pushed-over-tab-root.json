@@ -1,0 +1,819 @@
+[
+ {
+  "index": 0,
+  "type": "Other",
+  "label": "Demo App",
+  "rect": {
+   "x": 0,
+   "y": 0,
+   "width": 402,
+   "height": 874
+  },
+  "enabled": true,
+  "hittable": false,
+  "ref": "e1"
+ },
+ {
+  "index": 1,
+  "parentIndex": 0,
+  "type": "ScrollView",
+  "rect": {
+   "x": 0,
+   "y": 62,
+   "width": 402,
+   "height": 750
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e2"
+ },
+ {
+  "index": 2,
+  "parentIndex": 1,
+  "type": "Image",
+  "label": "Glyphs/search",
+  "rect": {
+   "x": 28,
+   "y": 82.66666666666666,
+   "width": 19,
+   "height": 19
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e3"
+ },
+ {
+  "index": 3,
+  "parentIndex": 1,
+  "type": "TextField",
+  "rect": {
+   "x": 55,
+   "y": 81,
+   "width": 319,
+   "height": 22
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e4"
+ },
+ {
+  "index": 4,
+  "parentIndex": 1,
+  "type": "Button",
+  "label": "Import files",
+  "rect": {
+   "x": 16,
+   "y": 126,
+   "width": 118,
+   "height": 100
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e5"
+ },
+ {
+  "index": 5,
+  "parentIndex": 1,
+  "type": "Button",
+  "label": "Album",
+  "rect": {
+   "x": 142,
+   "y": 126,
+   "width": 118,
+   "height": 100
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e6"
+ },
+ {
+  "index": 6,
+  "parentIndex": 1,
+  "type": "Button",
+  "label": "New folder",
+  "rect": {
+   "x": 268,
+   "y": 126,
+   "width": 118,
+   "height": 100
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e7"
+ },
+ {
+  "index": 7,
+  "parentIndex": 1,
+  "type": "StaticText",
+  "label": "My Files",
+  "rect": {
+   "x": 16,
+   "y": 238,
+   "width": 87.66666666666666,
+   "height": 27.66666666666663
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e8"
+ },
+ {
+  "index": 8,
+  "parentIndex": 1,
+  "type": "Button",
+  "label": "All",
+  "rect": {
+   "x": 15.5,
+   "y": 277.1666564941406,
+   "width": 42.66666793823242,
+   "height": 35
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e9"
+ },
+ {
+  "index": 9,
+  "parentIndex": 1,
+  "type": "Button",
+  "label": "Recent",
+  "rect": {
+   "x": 65.16666412353516,
+   "y": 277.1666564941406,
+   "width": 72.33333587646484,
+   "height": 35
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e10"
+ },
+ {
+  "index": 10,
+  "parentIndex": 1,
+  "type": "Button",
+  "label": "Folders",
+  "rect": {
+   "x": 144.5,
+   "y": 277.1666564941406,
+   "width": 75.33334350585938,
+   "height": 35
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e11"
+ },
+ {
+  "index": 11,
+  "parentIndex": 1,
+  "type": "Button",
+  "label": "Favorite",
+  "rect": {
+   "x": 226.8333282470703,
+   "y": 277.1666564941406,
+   "width": 79.33332824707031,
+   "height": 35
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e12"
+ },
+ {
+  "index": 12,
+  "parentIndex": 1,
+  "type": "Button",
+  "label": "View and filter options",
+  "rect": {
+   "x": 347,
+   "y": 272.66666666666663,
+   "width": 44,
+   "height": 44
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e13"
+ },
+ {
+  "index": 13,
+  "parentIndex": 1,
+  "type": "StaticText",
+  "label": "Sample_File.pdf",
+  "rect": {
+   "x": 86,
+   "y": 339.99999999999994,
+   "width": 215,
+   "height": 17
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e14"
+ },
+ {
+  "index": 14,
+  "parentIndex": 1,
+  "type": "StaticText",
+  "label": "02/10/2026 00:09 \u00b7 20 KB \u00b7 5 pages",
+  "rect": {
+   "x": 86,
+   "y": 358.99999999999994,
+   "width": 202,
+   "height": 14.333333333333314
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e15"
+ },
+ {
+  "index": 15,
+  "parentIndex": 1,
+  "type": "Button",
+  "label": "More actions for Sample_File.pdf",
+  "rect": {
+   "x": 352,
+   "y": 346.66666666666663,
+   "width": 20,
+   "height": 20
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e16"
+ },
+ {
+  "index": 16,
+  "parentIndex": 1,
+  "type": "StaticText",
+  "label": "PDF",
+  "rect": {
+   "x": 38.66666666666667,
+   "y": 368.66666666666663,
+   "width": 20.666666666666664,
+   "height": 12
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e17"
+ },
+ {
+  "index": 17,
+  "parentIndex": 1,
+  "type": "StaticText",
+  "label": "Sample_Doc.docx",
+  "rect": {
+   "x": 86,
+   "y": 406.3333333333333,
+   "width": 178.66666666666663,
+   "height": 17
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e18"
+ },
+ {
+  "index": 18,
+  "parentIndex": 1,
+  "type": "StaticText",
+  "label": "02/10/2026 00:09 \u00b7 6 KB",
+  "rect": {
+   "x": 86,
+   "y": 425.3333333333333,
+   "width": 139.33333333333331,
+   "height": 14.333333333333314
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e19"
+ },
+ {
+  "index": 19,
+  "parentIndex": 1,
+  "type": "Button",
+  "label": "More actions for Sample_Doc.docx",
+  "rect": {
+   "x": 352,
+   "y": 413,
+   "width": 20,
+   "height": 20
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e20"
+ },
+ {
+  "index": 20,
+  "parentIndex": 1,
+  "type": "StaticText",
+  "label": "DOC",
+  "rect": {
+   "x": 37.333333333333336,
+   "y": 435,
+   "width": 23.333333333333336,
+   "height": 12
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e21"
+ },
+ {
+  "index": 21,
+  "parentIndex": 1,
+  "type": "StaticText",
+  "label": "Sample_Sheet.xlsx",
+  "rect": {
+   "x": 86,
+   "y": 472.66666666666663,
+   "width": 158,
+   "height": 17
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e22"
+ },
+ {
+  "index": 22,
+  "parentIndex": 1,
+  "type": "StaticText",
+  "label": "02/10/2026 00:09 \u00b7 6 KB",
+  "rect": {
+   "x": 86,
+   "y": 491.66666666666663,
+   "width": 139.33333333333331,
+   "height": 14.333333333333314
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e23"
+ },
+ {
+  "index": 23,
+  "parentIndex": 1,
+  "type": "Button",
+  "label": "More actions for Sample_Sheet.xlsx",
+  "rect": {
+   "x": 352,
+   "y": 479.3333333333333,
+   "width": 20,
+   "height": 20
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e24"
+ },
+ {
+  "index": 24,
+  "parentIndex": 1,
+  "type": "StaticText",
+  "label": "XLS",
+  "rect": {
+   "x": 38.66666666666667,
+   "y": 501.3333333333333,
+   "width": 20.666666666666664,
+   "height": 11.999999999999943
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e25"
+ },
+ {
+  "index": 25,
+  "parentIndex": 1,
+  "type": "StaticText",
+  "label": "Sample_Slides.pptx",
+  "rect": {
+   "x": 86,
+   "y": 539,
+   "width": 180.66666666666663,
+   "height": 17
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e26"
+ },
+ {
+  "index": 26,
+  "parentIndex": 1,
+  "type": "StaticText",
+  "label": "02/10/2026 00:09 \u00b7 21 KB",
+  "rect": {
+   "x": 86,
+   "y": 558,
+   "width": 144.66666666666666,
+   "height": 14.333333333333258
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e27"
+ },
+ {
+  "index": 27,
+  "parentIndex": 1,
+  "type": "Button",
+  "label": "More actions for Sample_Slides.pptx",
+  "rect": {
+   "x": 352,
+   "y": 545.6666666666666,
+   "width": 20,
+   "height": 20
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e28"
+ },
+ {
+  "index": 28,
+  "parentIndex": 1,
+  "type": "StaticText",
+  "label": "PPT",
+  "rect": {
+   "x": 38.66666666666667,
+   "y": 567.6666666666666,
+   "width": 20.666666666666664,
+   "height": 12
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e29"
+ },
+ {
+  "index": 29,
+  "parentIndex": 0,
+  "type": "Button",
+  "rect": {
+   "x": 201,
+   "y": 451,
+   "width": 0,
+   "height": 0
+  },
+  "enabled": true,
+  "hittable": false,
+  "ref": "e30"
+ },
+ {
+  "index": 30,
+  "parentIndex": 0,
+  "type": "Button",
+  "label": "Create",
+  "rect": {
+   "x": 173,
+   "y": 766,
+   "width": 56,
+   "height": 56
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e31"
+ },
+ {
+  "index": 31,
+  "parentIndex": 0,
+  "type": "Button",
+  "label": "Tool",
+  "rect": {
+   "x": 84.66666412353516,
+   "y": 790.6666870117188,
+   "width": 22,
+   "height": 34.83331298828125
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e32"
+ },
+ {
+  "index": 32,
+  "parentIndex": 0,
+  "type": "Button",
+  "label": "Files",
+  "rect": {
+   "x": 239,
+   "y": 784,
+   "width": 135,
+   "height": 48
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e33"
+ },
+ {
+  "index": 33,
+  "parentIndex": 0,
+  "type": "Button",
+  "rect": {
+   "x": 201,
+   "y": 840,
+   "width": 0,
+   "height": 0
+  },
+  "enabled": true,
+  "hittable": false,
+  "ref": "e34"
+ },
+ {
+  "index": 34,
+  "parentIndex": 0,
+  "type": "Button",
+  "rect": {
+   "x": 201,
+   "y": 840,
+   "width": 0,
+   "height": 0
+  },
+  "enabled": true,
+  "hittable": false,
+  "ref": "e35"
+ },
+ {
+  "index": 35,
+  "parentIndex": 0,
+  "type": "Button",
+  "rect": {
+   "x": 201,
+   "y": 840,
+   "width": 0,
+   "height": 0
+  },
+  "enabled": true,
+  "hittable": false,
+  "ref": "e36"
+ },
+ {
+  "index": 36,
+  "parentIndex": 0,
+  "type": "Toolbar",
+  "label": "Toolbar",
+  "identifier": "Toolbar",
+  "rect": {
+   "x": 0,
+   "y": 0,
+   "width": 402,
+   "height": 874
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e37"
+ },
+ {
+  "index": 37,
+  "parentIndex": 0,
+  "type": "Button",
+  "label": "Back",
+  "rect": {
+   "x": 16,
+   "y": 62,
+   "width": 44,
+   "height": 44
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e38"
+ },
+ {
+  "index": 38,
+  "parentIndex": 0,
+  "type": "Button",
+  "label": "Rename",
+  "rect": {
+   "x": 306,
+   "y": 62,
+   "width": 17,
+   "height": 44
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e39"
+ },
+ {
+  "index": 39,
+  "parentIndex": 0,
+  "type": "Button",
+  "label": "Save",
+  "rect": {
+   "x": 340.3333333333333,
+   "y": 62,
+   "width": 45.666666666666686,
+   "height": 44
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e40"
+ },
+ {
+  "index": 40,
+  "parentIndex": 0,
+  "type": "StaticText",
+  "label": "Sample_File",
+  "rect": {
+   "x": 77.50000000000001,
+   "y": 73.83333333333333,
+   "width": 220.33333333333331,
+   "height": 20.33333333333333
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e41"
+ },
+ {
+  "index": 41,
+  "parentIndex": 0,
+  "type": "ScrollView",
+  "rect": {
+   "x": 0,
+   "y": 114,
+   "width": 402,
+   "height": 660
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e42"
+ },
+ {
+  "index": 42,
+  "parentIndex": 41,
+  "type": "Other",
+  "rect": {
+   "x": 0,
+   "y": 119.99999999999977,
+   "width": 402,
+   "height": 654.0000000000002
+  },
+  "enabled": true,
+  "hittable": false,
+  "ref": "e43"
+ },
+ {
+  "index": 43,
+  "parentIndex": 42,
+  "type": "Other",
+  "label": "DEMO",
+  "rect": {
+   "x": 45.01485064011377,
+   "y": 155.01788408778685,
+   "width": 106.21843488721805,
+   "height": 15.86600300751877
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e44"
+ },
+ {
+  "index": 44,
+  "parentIndex": 42,
+  "type": "Other",
+  "label": "Get started with a new experience of PDF!",
+  "rect": {
+   "x": 45.01485064011377,
+   "y": 181.0110408697417,
+   "width": 154.10806015037593,
+   "height": 9.375365413533842
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e45"
+ },
+ {
+  "index": 45,
+  "parentIndex": 42,
+  "type": "Other",
+  "label": "Demo App helps you read, convert, edit, and understand documents on your\nphone. Use this sample file to explore what the app can do.",
+  "rect": {
+   "x": 45.01485064011377,
+   "y": 200.35540177199732,
+   "width": 294.2937419548871,
+   "height": 18.75357203007519
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e46"
+ },
+ {
+  "index": 46,
+  "parentIndex": 42,
+  "type": "Other",
+  "label": "Tap the + button at the bottom to import photos, scan documents, convert files, or\ntransfer from your computer.",
+  "rect": {
+   "x": 45.01485064011377,
+   "y": 229.37194312538077,
+   "width": 301.43725172932386,
+   "height": 18.75357203007519
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e47"
+ },
+ {
+  "index": 47,
+  "parentIndex": 42,
+  "type": "Other",
+  "label": "Read All Document",
+  "rect": {
+   "x": 45.01485064011377,
+   "y": 645.7895483836617,
+   "width": 115.02785684210528,
+   "height": 15.86600300751877
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e48"
+ },
+ {
+  "index": 48,
+  "parentIndex": 42,
+  "type": "Other",
+  "label": "Open PDF, Word, Excel, PPT \u2014 fast and seamless",
+  "rect": {
+   "x": 45.01485064011377,
+   "y": 671.7827051656164,
+   "width": 180.1201804511279,
+   "height": 9.375365413533927
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e49"
+ },
+ {
+  "index": 49,
+  "parentIndex": 42,
+  "type": "Other",
+  "label": "Open PDF, Word, Excel, and PowerPoint files in one place. Preview them instantly and\nconvert between formats whenever you need.",
+  "rect": {
+   "x": 45.01485064011377,
+   "y": 691.1270660678721,
+   "width": 311.9316884210524,
+   "height": 18.753572030075247
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e50"
+ },
+ {
+  "index": 50,
+  "parentIndex": 0,
+  "type": "Button",
+  "label": "1 of 5",
+  "rect": {
+   "x": 151.33333333333331,
+   "y": 714.3333333333333,
+   "width": 99.33333333333331,
+   "height": 47.66666666666663
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e51"
+ },
+ {
+  "index": 51,
+  "parentIndex": 0,
+  "type": "Button",
+  "label": "Edit",
+  "rect": {
+   "x": 20,
+   "y": 790,
+   "width": 90.66666666666666,
+   "height": 52
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e52"
+ },
+ {
+  "index": 52,
+  "parentIndex": 0,
+  "type": "Button",
+  "label": "Share",
+  "rect": {
+   "x": 110.66666666666666,
+   "y": 790,
+   "width": 90.33333333333334,
+   "height": 52
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e53"
+ },
+ {
+  "index": 53,
+  "parentIndex": 0,
+  "type": "Button",
+  "label": "Print",
+  "rect": {
+   "x": 201,
+   "y": 790,
+   "width": 90.66666666666663,
+   "height": 52
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e54"
+ },
+ {
+  "index": 54,
+  "parentIndex": 0,
+  "type": "Button",
+  "label": "More",
+  "rect": {
+   "x": 291.66666666666663,
+   "y": 790,
+   "width": 90.33333333333331,
+   "height": 52
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e55"
+ }
+]

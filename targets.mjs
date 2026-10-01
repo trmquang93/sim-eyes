@@ -78,12 +78,55 @@ export function staleDialogBranches(nodes) {
   return stale;
 }
 
-/** The snapshot without leftover dialog branches: what is actually on screen. */
+const CONTENT_TYPES = new Set(["NavigationBar", "ScrollView", "CollectionView", "Table", "WebView"]);
+
+/**
+ * Indexes of nodes that belong to the screen under a presented sheet. iOS keeps the presenting
+ * screen in the accessibility tree: the sheet's branches come first, then a full-screen Toolbar
+ * node, then the screen below it. Branches split at those Toolbars into layers; when two layers
+ * hold screen content (a keyboard layer does not count), only the first one is on top.
+ * The exception is content after the last Toolbar: that Toolbar closes a tab root, and a screen
+ * pushed over it (a document viewer that hides the tab bar) is listed after it, so it is on top.
+ * A pushed screen with nothing after its Toolbar is left alone.
+ */
+export function behindModal(nodes) {
+  const root = nodes.find((n) => n.parentIndex == null);
+  if (!root) return new Set();
+  const byIndex = new Map(nodes.filter((n) => n.index != null).map((n) => [n.index, n]));
+  let layer = 0;
+  const layerOfBranch = new Map();
+  for (const node of nodes) {
+    if (node.parentIndex !== root.index) continue;
+    if (node.type === "Toolbar" && fillsScreen(node, root)) layer += 1;
+    else layerOfBranch.set(node.index, layer);
+  }
+  const layerOf = (node) => layerOfBranch.get(topBranch(node, byIndex)?.index);
+  const members = Array.from({ length: layer + 1 }, () => []);
+  for (const node of nodes) {
+    const l = layerOf(node);
+    if (l != null) members[l].push(node);
+  }
+  const hasContent = members.map(
+    (inLayer) =>
+      inLayer.some((n) => n.rect && n.rect.width >= 8 && n.rect.height >= 8) &&
+      inLayer.some((n) => CONTENT_TYPES.has(n.type)) &&
+      !inLayer.some((n) => /^Key(board)?$/.test(n.type))
+  );
+  const first = hasContent.indexOf(true);
+  if (first < 0 || hasContent.lastIndexOf(true) === first) return new Set();
+  const top = hasContent[layer] ? layer : first;
+  return new Set(
+    members.flatMap((inLayer, l) => (l !== top && hasContent[l] ? inLayer.map((n) => n.index) : []))
+  );
+}
+
+/** The snapshot without leftover dialog branches and without the screen under a sheet: what is actually on screen. */
 export function visibleNodes(nodes) {
   const stale = staleDialogBranches(nodes);
-  if (stale.size === 0) return nodes;
+  const behind = behindModal(nodes);
+  if (stale.size === 0 && behind.size === 0) return nodes;
   const byIndex = new Map(nodes.filter((n) => n.index != null).map((n) => [n.index, n]));
-  return nodes.filter((n) => !stale.has(topBranch(n, byIndex)?.index));
+  return nodes.filter((n) => !stale.has(topBranch(n, byIndex)?.index) && !behind.has(n.index));
 }
 
 /** System alert/sheet, or a consent web dialog covering the app. Leftover dialogs do not count. */
@@ -147,12 +190,16 @@ export function listTargets(allNodes) {
   const nodes = visibleNodes(allNodes);
   const dialog = coveringDialog(nodes);
   const underPopup = overlayCovered(nodes);
+  // A sheet's full-height Toolbar can make agent-device mark every control under it covered. A screen
+  // whose controls are all blocked is not a screen anyone can use, so the marks are a false alarm.
+  const tappable = nodes.filter((n) => n.enabled && isTapNode(n) && n.rect && n.rect.width >= 8 && n.rect.height >= 8);
+  const allCovered = tappable.length > 0 && tappable.every((n) => n.interactionBlocked === "covered");
   const items = [];
   let n = 0;
   for (const node of nodes) {
     if (!node.enabled) continue;
     // agent-device marks a control drawn under another view (e.g. a row under the tab bar).
-    if (node.interactionBlocked === "covered" || underPopup.has(node.index)) continue;
+    if ((node.interactionBlocked === "covered" && !allCovered) || underPopup.has(node.index)) continue;
     // A consent web dialog (UMP) sits over the app. Its buttons are in the tree,
     // and so are the rows behind it. Only the dialog's controls are tappable.
     if (
@@ -240,27 +287,8 @@ export function exactLabelMatches(targets, label) {
   return targets.filter((t) => t.label.trim().toLowerCase() === needle);
 }
 
-export function targetByIndex(targets, index) {
-  const n = Number(index);
-  return targets.find((t) => t.n === n) ?? null;
-}
 
-/** Delete key on the keyboard, not an app button named Delete. */
-export function keyboardDeleteTarget(targets, screenHeight) {
-  const minY = screenHeight * 0.62;
-  return (
-    targets.find(
-      (t) => t.y >= minY && /^(delete|backspace)$/i.test(t.label)
-    ) ?? null
-  );
-}
 
-export function ambiguousLabelNote(label, matches) {
-  return [
-    `${matches.length} controls are labeled "${label}". Pass index from this list:`,
-    formatTargets(matches),
-  ].join("\n");
-}
 
 /**
  * The accessibility tree as indented lines: type, label, frame (x, y, width x height).
@@ -272,6 +300,7 @@ export function formatTree(nodes, targets, { maxLines = 200, tag = (n) => ` -> #
   const numbers = new Map(targets.filter((t) => t.nodeIndex != null).map((t) => [t.nodeIndex, t.n]));
   const stale = staleDialogBranches(nodes);
   const underPopup = overlayCovered(visibleNodes(nodes));
+  const behind = behindModal(nodes);
   const depth = new Map();
   const lines = [];
   for (const node of nodes) {
@@ -286,6 +315,7 @@ export function formatTree(nodes, targets, { maxLines = 200, tag = (n) => ` -> #
       ? tag(numbers.get(node.index))
       : stale.has(node.index)
         ? " [leftover dialog, not on screen]"
+        : behind.has(node.index) && isTapNode(node) ? " [behind the sheet]"
         : underPopup.has(node.index) ? ` [covered by popup ${JSON.stringify(clip(underPopup.get(node.index), 40))}]`
         : node.interactionBlocked === "covered" ? " [covered by another view]"
         : isTapNode(node) ? " [not listed]" : "";

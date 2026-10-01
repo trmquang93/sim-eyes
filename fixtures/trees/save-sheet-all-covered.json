@@ -1,0 +1,112 @@
+[
+ {
+  "index": 0,
+  "type": "Other",
+  "label": "Demo App",
+  "rect": {
+   "x": 0,
+   "y": 0,
+   "width": 402,
+   "height": 874
+  },
+  "enabled": true,
+  "hittable": false,
+  "ref": "e1"
+ },
+ {
+  "index": 1,
+  "parentIndex": 0,
+  "type": "NavigationBar",
+  "identifier": "Save pages as",
+  "rect": {
+   "x": 0,
+   "y": 78,
+   "width": 402,
+   "height": 54
+  },
+  "enabled": true,
+  "hittable": false,
+  "ref": "e2",
+  "interactionBlocked": "covered"
+ },
+ {
+  "index": 2,
+  "parentIndex": 1,
+  "type": "Button",
+  "label": "Cancel",
+  "rect": {
+   "x": 20,
+   "y": 82,
+   "width": 76.66666666666666,
+   "height": 36
+  },
+  "enabled": true,
+  "hittable": false,
+  "ref": "e3",
+  "interactionBlocked": "covered"
+ },
+ {
+  "index": 3,
+  "parentIndex": 1,
+  "type": "StaticText",
+  "label": "Save pages as",
+  "rect": {
+   "x": 144.33333333333331,
+   "y": 88.66666666666666,
+   "width": 113.33333333333331,
+   "height": 22.66666666666667
+  },
+  "enabled": true,
+  "hittable": false,
+  "ref": "e4",
+  "interactionBlocked": "covered"
+ },
+ {
+  "index": 4,
+  "parentIndex": 0,
+  "type": "Button",
+  "label": "Overwrite old document",
+  "rect": {
+   "x": 20,
+   "y": 152,
+   "width": 362,
+   "height": 52.333333333333314
+  },
+  "enabled": true,
+  "hittable": false,
+  "ref": "e5",
+  "interactionBlocked": "covered"
+ },
+ {
+  "index": 5,
+  "parentIndex": 0,
+  "type": "Button",
+  "label": "Save as new document",
+  "rect": {
+   "x": 20,
+   "y": 220.33333333333331,
+   "width": 362,
+   "height": 52.333333333333314
+  },
+  "enabled": true,
+  "hittable": false,
+  "ref": "e6",
+  "interactionBlocked": "covered"
+ },
+ {
+  "index": 6,
+  "parentIndex": 0,
+  "type": "Toolbar",
+  "label": "Toolbar",
+  "identifier": "Toolbar",
+  "rect": {
+   "x": 0,
+   "y": 62,
+   "width": 402,
+   "height": 812
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e7"
+ }
+]

@@ -34,7 +34,7 @@ child.stdout.on("data", (d) => {
   }
 });
 
-const ACTIONS = new Set(["look", "open", "tap", "swipe", "drag", "type", "press", "record"]);
+const ACTIONS = new Set(["act", "open", "record"]);
 /** Action tools only exist inside batch; wrap a single one. */
 function toCall(name, args) {
   return ACTIONS.has(name)
@@ -57,12 +57,12 @@ async function run() {
   });
   await new Promise((r) => pending.set(initId, r));
 
-  const look = await callTool("look");
+  const look = await callTool("act");
   const lookText = look.result.content.find((c) => c.type === "text").text;
   console.log("LOOK:", lookText.split("\n").slice(0, 4).join("\n"));
   console.log("LOOK images:", look.result.content.filter((c) => c.type === "image").length);
 
-  const tap = await callTool("tap", { label: "General" });
+  const tap = await callTool("act", { instruction: "tap General" });
   const tapText = tap.result.content.find((c) => c.type === "text").text;
   console.log("TAP:", tapText.split("\n").slice(0, 4).join("\n"));
   console.log("TAP images:", tap.result.content.filter((c) => c.type === "image").length);
@@ -71,7 +71,7 @@ async function run() {
   const recStart = await callTool("record", { action: "start" });
   console.log("RECORD START:", recStart.result.content[0].text.split("\n")[0]);
 
-  await callTool("swipe", { direction: "up" });
+  await callTool("act", { instruction: "scroll down" });
   const recStop = await callTool("record", { action: "stop" });
   const stopText = recStop.result.content.find((c) => c.type === "text").text;
   const stopImages = recStop.result.content.filter((c) => c.type === "image");

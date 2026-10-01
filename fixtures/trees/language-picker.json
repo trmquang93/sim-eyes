@@ -1,0 +1,324 @@
+[
+ {
+  "index": 0,
+  "type": "Other",
+  "role": "_TtC7SwiftUIP33_ACC2C5639A7D76F611E170E831FCA49118SwiftUIApplication",
+  "subrole": "UIApplication",
+  "label": "PDF Converter",
+  "rect": {
+   "x": 0,
+   "y": 0,
+   "width": 402,
+   "height": 874
+  },
+  "enabled": true,
+  "depth": 0,
+  "pid": 95139,
+  "hittable": false,
+  "ref": "e1",
+  "kind": "other"
+ },
+ {
+  "index": 1,
+  "parentIndex": 0,
+  "type": "StaticText",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Choose your language",
+  "rect": {
+   "x": 16,
+   "y": 94,
+   "width": 292.3333333333333,
+   "height": 33.66666666666666
+  },
+  "enabled": true,
+  "depth": 1,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e2",
+  "kind": "text"
+ },
+ {
+  "index": 2,
+  "parentIndex": 0,
+  "type": "StaticText",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Every screen in the app will use it.",
+  "rect": {
+   "x": 16,
+   "y": 135.66666666666666,
+   "width": 219,
+   "height": 17
+  },
+  "enabled": true,
+  "depth": 1,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e3",
+  "kind": "text"
+ },
+ {
+  "index": 3,
+  "parentIndex": 0,
+  "type": "ScrollView",
+  "role": "SwiftUI.HostingScrollView",
+  "subrole": "UIScrollView",
+  "rect": {
+   "x": 0,
+   "y": 168.66666666666666,
+   "width": 402,
+   "height": 579.3333333333333
+  },
+  "enabled": true,
+  "depth": 1,
+  "pid": 95139,
+  "hittable": true,
+  "hiddenContentBelow": true,
+  "ref": "e4",
+  "kind": "scroll-area"
+ },
+ {
+  "index": 4,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "English, English",
+  "value": "Expanded",
+  "rect": {
+   "x": 0,
+   "y": 168.66666666666666,
+   "width": 402,
+   "height": 56
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e5",
+  "kind": "button"
+ },
+ {
+  "index": 5,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "United States, US",
+  "rect": {
+   "x": 0,
+   "y": 224.66666666666666,
+   "width": 402,
+   "height": 55.99999999999997
+  },
+  "enabled": true,
+  "selected": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e6",
+  "kind": "button"
+ },
+ {
+  "index": 6,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "United Kingdom, UK",
+  "rect": {
+   "x": 0,
+   "y": 280.66666666666663,
+   "width": 402,
+   "height": 56
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e7",
+  "kind": "button"
+ },
+ {
+  "index": 7,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Australia, Australia",
+  "rect": {
+   "x": 0,
+   "y": 336.66666666666663,
+   "width": 402,
+   "height": 56
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e8",
+  "kind": "button"
+ },
+ {
+  "index": 8,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Canada, Canada",
+  "rect": {
+   "x": 0,
+   "y": 392.66666666666663,
+   "width": 402,
+   "height": 56
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e9",
+  "kind": "button"
+ },
+ {
+  "index": 9,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Ti\u1ebfng Vi\u1ec7t, Vietnamese",
+  "rect": {
+   "x": 0,
+   "y": 448.66666666666663,
+   "width": 402,
+   "height": 56
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e10",
+  "kind": "button"
+ },
+ {
+  "index": 10,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Espa\u00f1ol, Spanish",
+  "value": "Collapsed",
+  "rect": {
+   "x": 0,
+   "y": 504.66666666666663,
+   "width": 402,
+   "height": 56
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e11",
+  "kind": "button"
+ },
+ {
+  "index": 11,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "\u0939\u093f\u0928\u094d\u0926\u0940, Hindi",
+  "rect": {
+   "x": 0,
+   "y": 560.6666666666666,
+   "width": 402,
+   "height": 56
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e12",
+  "kind": "button"
+ },
+ {
+  "index": 12,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "\u0627\u0644\u0639\u0631\u0628\u064a\u0629, Arabic",
+  "rect": {
+   "x": 0,
+   "y": 616.6666666666666,
+   "width": 402,
+   "height": 56
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e13",
+  "kind": "button"
+ },
+ {
+  "index": 13,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "\u09ac\u09be\u0982\u09b2\u09be, Bengali",
+  "rect": {
+   "x": 0,
+   "y": 672.6666666666666,
+   "width": 402,
+   "height": 56
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e14",
+  "kind": "button"
+ },
+ {
+  "index": 14,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "\u0420\u0443\u0441\u0441\u043a\u0438\u0439, Russian",
+  "rect": {
+   "x": 0,
+   "y": 728.6666666666666,
+   "width": 402,
+   "height": 19.333333333333258
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e15",
+  "kind": "button"
+ },
+ {
+  "index": 15,
+  "parentIndex": 0,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Apply",
+  "rect": {
+   "x": 16,
+   "y": 764,
+   "width": 370,
+   "height": 52
+  },
+  "enabled": true,
+  "depth": 1,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e16",
+  "kind": "button"
+ }
+]

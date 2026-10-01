@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const tool = process.argv[2];
 const args = process.argv[3] ? JSON.parse(process.argv[3]) : {};
 
-const ACTIONS = new Set(["look", "open", "tap", "swipe", "drag", "type", "press", "record"]);
+const ACTIONS = new Set(["act", "open", "record"]);
 /** Action tools only exist inside batch; wrap a single one. */
 function toCall(name, args) {
   return ACTIONS.has(name)

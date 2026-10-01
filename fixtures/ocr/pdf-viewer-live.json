@@ -1,0 +1,74 @@
+[
+ {
+  "y": 32,
+  "width": 50,
+  "text": "03:58",
+  "height": 14,
+  "confidence": 0.5,
+  "x": 74
+ },
+ {
+  "width": 304,
+  "height": 13,
+  "text": "Welcome to PDF Conver... > Save",
+  "confidence": 0.5,
+  "x": 230,
+  "y": 85
+ },
+ {
+  "x": 98,
+  "text": "PDF CONVERTER",
+  "height": 10,
+  "y": 163,
+  "confidence": 0.5,
+  "width": 104
+ },
+ {
+  "confidence": 0.5,
+  "width": 88,
+  "text": "514rlrwwurconwt*r",
+  "height": 8,
+  "x": 104,
+  "y": 244
+ },
+ {
+  "confidence": 0.5,
+  "text": "Read All DocuThnt",
+  "y": 654,
+  "height": 10,
+  "x": 102,
+  "width": 113
+ },
+ {
+  "height": 7,
+  "x": 135,
+  "confidence": 0.5,
+  "y": 678,
+  "text": "(WnPDF.WorQEwql. ppr-taDt4M*BrnI*s",
+  "width": 180
+ },
+ {
+  "x": 213,
+  "y": 738,
+  "width": 33,
+  "height": 10,
+  "text": "1 of 5",
+  "confidence": 0.5
+ },
+ {
+  "confidence": 0.5,
+  "x": 156,
+  "height": 8,
+  "text": "Sh4re",
+  "y": 829,
+  "width": 27
+ },
+ {
+  "x": 337,
+  "y": 829,
+  "confidence": 0.5,
+  "text": "Nlore",
+  "width": 23,
+  "height": 8
+ }
+]

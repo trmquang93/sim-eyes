@@ -1,0 +1,657 @@
+[
+ {
+  "index": 0,
+  "type": "Other",
+  "role": "_TtC7SwiftUIP33_ACC2C5639A7D76F611E170E831FCA49118SwiftUIApplication",
+  "subrole": "UIApplication",
+  "label": "PDF Converter",
+  "rect": {
+   "x": 0,
+   "y": 0,
+   "width": 402,
+   "height": 874
+  },
+  "enabled": true,
+  "depth": 0,
+  "pid": 95139,
+  "hittable": false,
+  "ref": "e1",
+  "kind": "other"
+ },
+ {
+  "index": 1,
+  "parentIndex": 0,
+  "type": "StaticText",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Tool",
+  "rect": {
+   "x": 16,
+   "y": 70,
+   "width": 54,
+   "height": 33.66666666666666
+  },
+  "enabled": true,
+  "depth": 1,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e2",
+  "kind": "text"
+ },
+ {
+  "index": 2,
+  "parentIndex": 0,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Settings",
+  "rect": {
+   "x": 353,
+   "y": 65,
+   "width": 44,
+   "height": 44
+  },
+  "enabled": true,
+  "depth": 1,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e3",
+  "kind": "button"
+ },
+ {
+  "index": 3,
+  "parentIndex": 0,
+  "type": "ScrollView",
+  "role": "SwiftUI.HostingScrollView",
+  "subrole": "UIScrollView",
+  "rect": {
+   "x": 0,
+   "y": 119.66666666666666,
+   "width": 402,
+   "height": 692.3333333333334
+  },
+  "enabled": true,
+  "depth": 1,
+  "pid": 95139,
+  "hittable": true,
+  "hiddenContentBelow": true,
+  "ref": "e4",
+  "kind": "scroll-area"
+ },
+ {
+  "index": 4,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Image to PDF",
+  "rect": {
+   "x": 16,
+   "y": 119.66666666666666,
+   "width": 179,
+   "height": 149.99999999999997
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e5",
+  "kind": "button"
+ },
+ {
+  "index": 5,
+  "parentIndex": 4,
+  "type": "StaticText",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Pick photos, get one document",
+  "rect": {
+   "x": 32,
+   "y": 212,
+   "width": 95.33333333333333,
+   "height": 28.666666666666657
+  },
+  "enabled": true,
+  "depth": 3,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e6",
+  "kind": "text"
+ },
+ {
+  "index": 6,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Scan to PDF",
+  "rect": {
+   "x": 207,
+   "y": 119.66666666666666,
+   "width": 179,
+   "height": 149.99999999999997
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e7",
+  "kind": "button"
+ },
+ {
+  "index": 7,
+  "parentIndex": 6,
+  "type": "StaticText",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Use the camera, page by page",
+  "rect": {
+   "x": 223,
+   "y": 212,
+   "width": 127.33333333333331,
+   "height": 28.666666666666657
+  },
+  "enabled": true,
+  "depth": 3,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e8",
+  "kind": "text"
+ },
+ {
+  "index": 8,
+  "parentIndex": 3,
+  "type": "StaticText",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Convert",
+  "rect": {
+   "x": 16,
+   "y": 317.66666666666663,
+   "width": 60.33333333333333,
+   "height": 19.33333333333337
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e9",
+  "kind": "text"
+ },
+ {
+  "index": 9,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "PDF to Word",
+  "rect": {
+   "x": 25.58333396911621,
+   "y": 349,
+   "width": 67.33333587646484,
+   "height": 81.33334350585938
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e10",
+  "kind": "button"
+ },
+ {
+  "index": 10,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "PDF to Excel",
+  "rect": {
+   "x": 120.08333587646484,
+   "y": 349,
+   "width": 67.33333587646484,
+   "height": 81.33334350585938
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e11",
+  "kind": "button"
+ },
+ {
+  "index": 11,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "PDF to PPT",
+  "rect": {
+   "x": 217.9166717529297,
+   "y": 349,
+   "width": 60.66667175292969,
+   "height": 81.33334350585938
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e12",
+  "kind": "button"
+ },
+ {
+  "index": 12,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "PDF to JPG",
+  "rect": {
+   "x": 312.4166564941406,
+   "y": 349,
+   "width": 60.666656494140625,
+   "height": 81.33334350585938
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e13",
+  "kind": "button"
+ },
+ {
+  "index": 13,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Word to PDF",
+  "rect": {
+   "x": 25.58333396911621,
+   "y": 460.3333435058594,
+   "width": 67.33333587646484,
+   "height": 81.49746704101562
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e14",
+  "kind": "button"
+ },
+ {
+  "index": 14,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Excel to PDF",
+  "rect": {
+   "x": 120.08333587646484,
+   "y": 460.3333435058594,
+   "width": 67.33333587646484,
+   "height": 81.49746704101562
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e15",
+  "kind": "button"
+ },
+ {
+  "index": 15,
+  "parentIndex": 3,
+  "type": "StaticText",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Edit",
+  "rect": {
+   "x": 16,
+   "y": 580,
+   "width": 29.666666666666664,
+   "height": 19.33333333333337
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e16",
+  "kind": "text"
+ },
+ {
+  "index": 16,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "AI PDF",
+  "rect": {
+   "x": 29.33333396911621,
+   "y": 611.3333129882812,
+   "width": 60,
+   "height": 81.33331298828125
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e17",
+  "kind": "button"
+ },
+ {
+  "index": 17,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Merge",
+  "rect": {
+   "x": 123.66666412353516,
+   "y": 611.3333129882812,
+   "width": 59.99999237060547,
+   "height": 81.33331298828125
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e18",
+  "kind": "button"
+ },
+ {
+  "index": 18,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Extract pages",
+  "rect": {
+   "x": 211.0833282470703,
+   "y": 611.3333129882812,
+   "width": 74.33332824707031,
+   "height": 81.33331298828125
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e19",
+  "kind": "button"
+ },
+ {
+  "index": 19,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Rearrange pages",
+  "rect": {
+   "x": 312.6666564941406,
+   "y": 611.3333129882812,
+   "width": 60,
+   "height": 94.33331298828125
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e20",
+  "kind": "button"
+ },
+ {
+  "index": 20,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Compress",
+  "rect": {
+   "x": 29.33333396911621,
+   "y": 722.6666870117188,
+   "width": 60,
+   "height": 81.4974365234375
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e21",
+  "kind": "button"
+ },
+ {
+  "index": 21,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Sign",
+  "rect": {
+   "x": 123.66666412353516,
+   "y": 722.6666870117188,
+   "width": 59.99999237060547,
+   "height": 81.4974365234375
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e22",
+  "kind": "button"
+ },
+ {
+  "index": 22,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Lock",
+  "rect": {
+   "x": 218.3333282470703,
+   "y": 722.6666870117188,
+   "width": 59.99998474121094,
+   "height": 81.4974365234375
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e23",
+  "kind": "button"
+ },
+ {
+  "index": 23,
+  "parentIndex": 3,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Watermark",
+  "rect": {
+   "x": 312.6666564941406,
+   "y": 722.6666870117188,
+   "width": 60,
+   "height": 81.4974365234375
+  },
+  "enabled": true,
+  "depth": 2,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e24",
+  "kind": "button"
+ },
+ {
+  "index": 24,
+  "parentIndex": 0,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "rect": {
+   "x": 201,
+   "y": 451,
+   "width": 0,
+   "height": 0
+  },
+  "enabled": true,
+  "depth": 1,
+  "pid": 95139,
+  "hittable": false,
+  "ref": "e25",
+  "kind": "button"
+ },
+ {
+  "index": 25,
+  "parentIndex": 0,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "rect": {
+   "x": 201,
+   "y": 451,
+   "width": 0,
+   "height": 0
+  },
+  "enabled": true,
+  "depth": 1,
+  "pid": 95139,
+  "hittable": false,
+  "ref": "e26",
+  "kind": "button"
+ },
+ {
+  "index": 26,
+  "parentIndex": 0,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Create",
+  "rect": {
+   "x": 173,
+   "y": 766,
+   "width": 56,
+   "height": 56
+  },
+  "enabled": true,
+  "depth": 1,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e27",
+  "kind": "button"
+ },
+ {
+  "index": 27,
+  "parentIndex": 0,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Tool",
+  "rect": {
+   "x": 28,
+   "y": 784,
+   "width": 135,
+   "height": 48
+  },
+  "enabled": true,
+  "selected": true,
+  "depth": 1,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e28",
+  "kind": "button"
+ },
+ {
+  "index": 28,
+  "parentIndex": 0,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "label": "Files",
+  "rect": {
+   "x": 294.6666564941406,
+   "y": 790.6666870117188,
+   "width": 23.666656494140625,
+   "height": 34.83331298828125
+  },
+  "enabled": true,
+  "depth": 1,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e29",
+  "kind": "button"
+ },
+ {
+  "index": 29,
+  "parentIndex": 0,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "rect": {
+   "x": 201,
+   "y": 840,
+   "width": 0,
+   "height": 0
+  },
+  "enabled": true,
+  "depth": 1,
+  "pid": 95139,
+  "hittable": false,
+  "ref": "e30",
+  "kind": "button"
+ },
+ {
+  "index": 30,
+  "parentIndex": 0,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "rect": {
+   "x": 201,
+   "y": 840,
+   "width": 0,
+   "height": 0
+  },
+  "enabled": true,
+  "depth": 1,
+  "pid": 95139,
+  "hittable": false,
+  "ref": "e31",
+  "kind": "button"
+ },
+ {
+  "index": 31,
+  "parentIndex": 0,
+  "type": "Button",
+  "role": "SwiftUI.AccessibilityNode",
+  "subrole": "NSObject",
+  "rect": {
+   "x": 201,
+   "y": 840,
+   "width": 0,
+   "height": 0
+  },
+  "enabled": true,
+  "depth": 1,
+  "pid": 95139,
+  "hittable": false,
+  "ref": "e32",
+  "kind": "button"
+ },
+ {
+  "index": 32,
+  "parentIndex": 0,
+  "type": "Toolbar",
+  "role": "_UIFloatingBarContainerView",
+  "label": "Toolbar",
+  "identifier": "Toolbar",
+  "rect": {
+   "x": 0,
+   "y": 0,
+   "width": 402,
+   "height": 874
+  },
+  "enabled": true,
+  "depth": 1,
+  "pid": 95139,
+  "hittable": true,
+  "ref": "e33",
+  "kind": "toolbar"
+ }
+]

@@ -20,57 +20,51 @@ Unit tests use `scripts/run-unit-tests.sh` (separate lease), not the UI chat's `
 
 | Tool | Purpose |
 | --- | --- |
-| `acquire` | Lease an exclusive UDID. **`app` is required** (display name or bundle id): the session attaches to that app without relaunching it. Optional `prefer_udid` / `prefer_device`. Also closes agent-device sessions left by dead sim-eyes processes. |
+| `acquire` | Lease an exclusive UDID. **`app` is required** (display name or bundle id): the session attaches to that app without relaunching it. Optional `prefer_udid` / `prefer_device`: sim-pool treats them as hints, so when it hands out a different simulator the call **fails** (and releases that lease) with the pool row that explains why. Also closes agent-device sessions left by dead sim-eyes processes. |
 | `release` | Free the lease + close the session when QA ends |
 | `status` | This process binding + host pool table |
-| `batch` | Runs actions; auto-acquires on first use if you forgot `acquire` |
+| `batch` | Runs `act` / `open` / `record` steps; auto-acquires on first use if you forgot `acquire` |
 
 If the pool is busy → tool returns `SIM_POOL_BUSY` → mark QA **inconclusive**. Do not steal another lease.
 
 Also install/use the **sim-pool** skill. Set `SIM_POOL_BIN` if it is not under `~/.claude/skills/sim-pool/scripts/sim-pool`.
 
-Only steps someone reads take a snapshot and screenshot: the last step, `look`, steps with `save`, and steps followed by an `index` action. A tap, type or press followed by `wait` skips agent-device's `--settle`, so write flows as step → `wait` → step.
-
-Every action goes through one tool, `batch`, which takes an array of actions. **Queue long batches:** put a whole flow (often 10–20 steps, with `look` + `save` wherever you need evidence) in one call instead of one or two steps per call. Each extra call costs a round-trip and an agent turn; queued steps cost only their gesture. Split only where the next step depends on reading the screen. Calling `tap`, `look` and the other action names directly returns an error that points to `batch`.
+sim-eyes is **act-only**: an agent drives the simulator with `act`, plus `open` (launch, restart, reset the app) and `record` (video). There are no tap, swipe, type, look or wait tools. All of it goes through one tool, `batch`, which takes an array of steps. **Queue whole flows:** put 5–20 steps in one call instead of one or two per call. Each extra call costs a round-trip and an agent turn; queued steps cost only their gesture. Split only where the next step depends on reading the screen. Calling `tap`, `look` or another retired name, directly or as a step, returns an error that says which `act` step to send.
 
 ```json
-{ "app": "com.example.app", "actions": [{ "tool": "tap", "label": "Files" }, { "tool": "wait", "ms": 300 }, { "tool": "tap", "index": 3, "save": "shot.png" }] }
+{ "app": "com.example.app", "actions": [{ "tool": "act", "instruction": "tap Files" }, { "tool": "act", "drag": { "from": "1", "to": "5" } }, { "tool": "act", "instruction": "tap Save", "save": "/abs/path/saved.png" }] }
 ```
 
-`app` is required on every `acquire` and `batch`. Without it the session used to attach to the home screen and send the app under test to the background.
+Batch arguments: `app` (required), `actions`, `image` (return the final screenshot; default `true`) and `continue_on_fail` (keep going after a step stops; default `false`).
 
-| Action `tool` | Arguments |
+| Step `tool` | Arguments |
 | --- | --- |
-| `look` | optional `save`, optional `tree: true` (also prints the accessibility view hierarchy; each tappable node shows its control number or `[not listed]`) |
-| `open` | `name` (app name or bundle id); keeps a running app unless `relaunch: true` |
-| `tap` | `index` from the last look, `label`, or `x` and `y` |
-| `swipe` | `direction`: `up`, `down`, `left`, `right` |
-| `drag` | `x1`, `y1`, `x2`, `y2` |
-| `type` | `text` plus `index` or `label`, optional `replace` |
-| `press` | `key`: `search`, `return`, `delete`, `dismiss` |
-| `record` | `action`: `start` or `stop` |
-| `wait` | `ms` (max 10000) |
-| `act` | `instruction` (plain language), optional `text`, `max_steps` (default 5, max 10) |
+| `act` | `instruction` (plain language, one goal); optional `text`, `max_steps` (default 5, max 10), `wait_ms` (pause first, max 10000), `drag` `{from, to, hold_ms}`, `long_press`, `controls`, `save` |
+| `open` | `name` (default: the batch app); `relaunch: true` restarts it; `reset: true` reinstalls it from its own bundle so its data, preferences and first-launch state are fresh (needs the bundle id) |
+| `record` | `action`: `start` or `stop`; stop returns a contact sheet, plus `frames` (0–6, default 0) |
 
-Actions run in order. An `index` refers to the look taken after the previous step. The queue stops at the first error or skipped tap/type, and the result is one line per step plus the final screenshot. Any action accepts `save` to keep its screenshot.
+Steps run in order and stop at the first step that fails or does nothing. Every step reports the screen it left behind **in text**: the navigation title, the pager position ("Page 2 of 3"), an open alert, a few visible texts and the control labels. An agent reads that instead of asking for a screenshot, so intermediate pages are visible. Only the last step returns a screenshot, and any step that fails returns one with the controls listed with positions. `save` writes a step's screenshot to the path you give; a relative path goes to the session work dir (`~/.local/sim-eyes/work/<session>/saves/`), so pass an absolute path to keep it somewhere, and the reply gives the full path.
 
-### `act`: when you cannot predict the screen
+### `act`
 
-`act` takes a goal such as `"allow notifications if asked"` or `"open Privacy & Security settings"`. Each round it reads the controls on screen and asks TypeSafe (`TYPESAFE_API_KEY`) two questions in one request: is the goal already met, and which single action comes next (tap a control, fill a field, swipe, return, dismiss keyboard, or none). Code runs that action and repeats. It never invents text: it can only fill a field with the `text` you pass.
+`act` carries out one goal. Four routes, cheapest first:
 
-When no control on screen has an accessibility label (custom-drawn or web views), `act` also runs Apple Vision OCR on the screenshot (`ocr.swift`, compiled to `~/.local/sim-eyes/bin/ocr` on first use, which takes about 30 s) and offers each recognized text as a tap target, marked as read from the screenshot. If any control has a label, OCR is not run. Icon-only buttons have no text, so use `tap` with `x` and `y` for them. If OCR fails, the `act` result says so.
+1. **No instruction** only reports the screen (a look), with no model call. `wait_ms` waits first.
+2. **`tap <label>`** (also press, click, select, choose, open, go to) where exactly one control has that exact label is carried out by code with no model call. It counts as done when the screen visibly changed.
+3. **`drag` and `long_press`** are structured and carried out by code. `drag: {"from": "1", "to": "5"}` holds the source (600 ms by default), drags it onto the target and checks that the screen changed. `from`, `to` and `long_press` take a visible label (a page number or a row title counts, even when it is not a tappable control) or a point `{"x": …, "y": …}`; a label that two elements share is an error that lists them. What is behind a sheet cannot be addressed.
+4. **Anything else** asks TypeSafe (`TYPESAFE_API_KEY`) two questions in one request per round: is the goal already met, and which single action comes next (tap a control, fill a field, swipe, return, dismiss keyboard, or none). Code runs that action and repeats. It never invents text: it can only fill a field with the `text` you pass.
 
-After every tap, `act` compares screenshots from before and after (`ocr --diff`, ignoring the status bar) and reports whether the screen changed and whether it changed in the tapped control's rows. TypeSafe sees this as the step's `effect`, so a checkmark or switch that no control or text shows still confirms "select / toggle X". Result wording: `done` (goal confirmed); `acted but not confirmed` (steps were taken, the goal could not be confirmed, and the last step's effect is stated: check the screenshot); `stopped` or `stuck` (nothing useful was done).
+When no control on screen has an accessibility label (custom-drawn or web views), `act` also runs Apple Vision OCR on the screenshot (`ocr.swift`, compiled to `~/.local/sim-eyes/bin/ocr` on first use, which takes about 30 s) and offers each recognized text as a tap target. If any control has a label, OCR is not run. If OCR fails, the `act` result says so.
 
-TypeSafe also sees the navigation title, where Back leads, any open alert, and the steps already taken. It stops as done when the goal is met with probability 0.7 or more (a conditional goal whose condition does not hold is met with 0 steps). It stops the queue as skipped when TypeSafe picks none, its confidence is below 0.7, the same action repeats on an unchanged screen, or `max_steps` runs out. The result lists every step it took with its confidence.
+After every tap, `act` compares screenshots from before and after (`ocr --diff`, ignoring the status bar) and reports whether the screen changed and whether it changed in the tapped control's rows, so a checkmark or switch that no control or text shows still confirms "select / toggle X".
 
-```json
-{ "actions": [{ "tool": "open", "name": "Settings" }, { "tool": "act", "instruction": "open Privacy & Security settings" }] }
-```
+Results: `done` (goal confirmed); `acted but not confirmed` (steps ran but the goal could not be read from the screen; the batch continues when the last step visibly changed the screen, otherwise it stops); `stopped` or `stuck` (nothing useful happened; the batch stops). The result lists every model-driven step with its confidence.
 
-The control list leaves out controls agent-device marks as covered by another view, and a consent web dialog left in the tree after it closed (it is a leftover when the app's own views appear beside it; a dialog that is really shown is the only thing in the tree). `act` also sends TypeSafe the view hierarchy.
+The control list leaves out controls agent-device marks as covered by another view, the screen under a presented sheet (iOS keeps it in the accessibility tree behind the sheet's), and a consent web dialog left in the tree after it closed. A sheet whose Toolbar makes agent-device mark every control covered is not hidden. An empty control list is read again after a short wait, since a sheet that has just been presented can come back empty.
 
-`look` numbers every control and, for a text field, prints `placeholder` and `value` when they differ from the label. `tap` and `type` accept that `index`, so the control you saw is the one that is pressed. A label shared by two controls is not pressed; the reply lists the indexes. `type` with `replace: true` sets the whole field. `press` sends a keyboard key (`search` and `return` submit, `dismiss` hides the keyboard, `delete` is the keyboard delete key) and does not match a row with the same name. Coordinates are points. Screenshots are 1x.
+A view in another process (the Photos picker, a permission sheet) draws over the app but is not in its accessibility tree, so the tree still lists the controls underneath. Each step reads the screenshot (OCR) and, when almost none of the tree's control labels can be read on screen, reports `screen: covered by a view outside the app's accessibility tree` with the text that is on screen; `act` then offers only that text as tap targets, and `tap <label>` is not carried out by code at the tree's positions. The icon-only buttons of such a view have no text and cannot be tapped.
+
+`go back` is carried out by code when exactly one control is the Back button (the navigation bar's, or any control labelled "Back")
 
 Requires [agent-device](https://www.npmjs.com/package/agent-device) (`npx` is used when it is not on `PATH`) and a booted iOS simulator. `record` stop also uses `ffmpeg`.
 

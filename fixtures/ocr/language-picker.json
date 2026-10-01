@@ -1,0 +1,138 @@
+[
+ {
+  "text": "03:57",
+  "height": 14,
+  "x": 75,
+  "y": 32,
+  "confidence": 0.5,
+  "width": 49
+ },
+ {
+  "height": 26,
+  "text": "Choose your language",
+  "confidence": 0.5,
+  "x": 162,
+  "y": 113,
+  "width": 290
+ },
+ {
+  "y": 145,
+  "width": 217,
+  "text": "Every scr&&n in iho Epp will use it.",
+  "x": 126,
+  "height": 14,
+  "confidence": 0.5
+ },
+ {
+  "y": 190,
+  "height": 16,
+  "text": "English",
+  "width": 56,
+  "x": 45,
+  "confidence": 0.5
+ },
+ {
+  "text": "United States",
+  "confidence": 0.5,
+  "y": 244,
+  "width": 109,
+  "x": 96,
+  "height": 14
+ },
+ {
+  "text": "us",
+  "x": 49,
+  "y": 263,
+  "width": 16,
+  "height": 10,
+  "confidence": 0.5
+ },
+ {
+  "text": "United Kingdom",
+  "confidence": 0.5,
+  "y": 302,
+  "width": 121,
+  "height": 16,
+  "x": 102
+ },
+ {
+  "height": 9,
+  "width": 16,
+  "x": 49,
+  "text": "UK",
+  "confidence": 0.5,
+  "y": 320
+ },
+ {
+  "x": 73,
+  "text": "Australia",
+  "y": 356,
+  "confidence": 0.5,
+  "width": 64,
+  "height": 13
+ },
+ {
+  "width": 56,
+  "height": 13,
+  "x": 69,
+  "confidence": 0.5,
+  "y": 412,
+  "text": "Canada"
+ },
+ {
+  "x": 63,
+  "text": "Canada",
+  "y": 431,
+  "width": 44,
+  "confidence": 0.5,
+  "height": 9
+ },
+ {
+  "width": 79,
+  "confidence": 0.5,
+  "y": 469,
+  "height": 19,
+  "text": "rieng Viet",
+  "x": 57
+ },
+ {
+  "x": 51,
+  "confidence": 0.5,
+  "height": 10,
+  "width": 70,
+  "text": "Vietnamese",
+  "y": 487
+ },
+ {
+  "width": 61,
+  "height": 16,
+  "text": "Espanol",
+  "confidence": 0.5,
+  "x": 48,
+  "y": 526
+ },
+ {
+  "x": 40,
+  "confidence": 0.5,
+  "y": 544,
+  "text": "Spanish",
+  "width": 46,
+  "height": 12
+ },
+ {
+  "text": "Arabic",
+  "x": 36,
+  "y": 656,
+  "width": 37,
+  "confidence": 0.5,
+  "height": 9
+ },
+ {
+  "text": "Apply",
+  "x": 202,
+  "confidence": 0.5,
+  "width": 45,
+  "y": 792,
+  "height": 16
+ }
+]

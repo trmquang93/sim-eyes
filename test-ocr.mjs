@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { needsOcr, ocrTargets } from "./ocr.mjs";
+import { fileURLToPath } from "node:url";
+import { needsOcr, ocrTargets, recognizeText } from "./ocr.mjs";
 import { listTargets } from "./targets.mjs";
 
 const rect = { x: 0, y: 0, width: 80, height: 40 };
@@ -62,6 +63,16 @@ assert.equal(
   ]);
   assert.deepEqual(found.map((t) => t.label), ["Choose your / language", "Русский / Russian", "Japanese"]);
   assert.deepEqual([found[1].x, found[1].y], [66, 181]);
+}
+
+// Real Vision run: the accurate engine fails to load on some macOS builds (e5rt error), and a
+// screen with no accessibility labels is then unreadable. The helper must fall back, not throw.
+{
+  const lines = await recognizeText(fileURLToPath(new URL("./fixtures/ocr-label-less-card.png", import.meta.url)));
+  const texts = lines.map((l) => l.text);
+  assert.ok(texts.includes("Image to PDF"), `Vision read no title from the fixture: ${JSON.stringify(texts)}`);
+  const card = ocrTargets(lines, []).find((t) => t.label === "Image to PDF");
+  assert.ok(card, "the fixture's title is not offered as a tap target");
 }
 
 console.log("test-ocr: ok");

@@ -95,7 +95,7 @@ export function effectText(effect) {
   if (!effect) return "";
   if (!effect.screenChanged) return "left the screen unchanged, so it probably had no effect";
   if (effect.changedAtControl) return "changed the screen at the tapped control";
-  return "changed the screen, but not at the tapped control";
+  return "changed the screen elsewhere than the tapped control (navigation, a pager, a sheet)";
 }
 
 /** Stable text of what the screen offers, to spot an action repeated on an unchanged screen. */
@@ -194,7 +194,7 @@ export function typesafeClient() {
   const apiKey = process.env.TYPESAFE_API_KEY;
   if (!apiKey) {
     throw new Error(
-      "act needs TYPESAFE_API_KEY in the sim-eyes MCP env. Use tap, type, swipe or press with explicit targets instead."
+      "act needs TYPESAFE_API_KEY in the sim-eyes MCP env for any goal code cannot answer. Only \"tap <exact label>\", \"go back\", drag and long_press run without it."
     );
   }
   return new TypeSafeClient({ apiKey });

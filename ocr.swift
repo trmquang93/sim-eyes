@@ -65,19 +65,41 @@ else {
 
 let width = Double(cg.width)
 let height = Double(cg.height)
-let request = VNRecognizeTextRequest()
-request.recognitionLevel = .accurate
-request.usesLanguageCorrection = false
+/// Reads with `level`; nil when that engine fails (the accurate model can fail to load on some macOS builds).
+func read(_ level: VNRequestTextRecognitionLevel) -> (results: [VNRecognizedTextObservation], error: Error?) {
+    let request = VNRecognizeTextRequest()
+    request.recognitionLevel = level
+    request.usesLanguageCorrection = false
+    do {
+        try VNImageRequestHandler(cgImage: cg, options: [:]).perform([request])
+        return (request.results ?? [], nil)
+    } catch {
+        return ([], error)
+    }
+}
 
-do {
-    try VNImageRequestHandler(cgImage: cg, options: [:]).perform([request])
-} catch {
-    FileHandle.standardError.write(Data("ocr failed: \(error)\n".utf8))
-    exit(1)
+// The accurate engine can fail to load on a macOS build, and the failure takes ~25 s to surface.
+// The failure is remembered per OS build in a marker file so later runs go straight to .fast.
+let osBuild = ProcessInfo.processInfo.operatingSystemVersionString
+let marker = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/sim-eyes/ocr-accurate-unavailable")
+let accurateKnownBroken = (try? String(contentsOf: marker, encoding: .utf8)) == osBuild
+
+var reading = accurateKnownBroken ? (results: [VNRecognizedTextObservation](), error: nil as Error?) : read(.accurate)
+if accurateKnownBroken || reading.error != nil {
+    let accurateError = reading.error
+    reading = read(.fast)
+    if let fastError = reading.error {
+        FileHandle.standardError.write(Data("ocr failed: accurate: \(accurateError.map { "\($0)" } ?? "unavailable on \(osBuild)"); fast: \(fastError)\n".utf8))
+        exit(1)
+    }
+    if let accurateError {
+        try? osBuild.write(to: marker, atomically: true, encoding: .utf8)
+        FileHandle.standardError.write(Data("ocr: accurate level failed (\(accurateError)); used fast level\n".utf8))
+    }
 }
 
 var items: [[String: Any]] = []
-for observation in request.results ?? [] {
+for observation in reading.results {
     guard let best = observation.topCandidates(1).first else { continue }
     let box = observation.boundingBox  // normalized, origin bottom-left
     items.append([

@@ -1,0 +1,82 @@
+[
+ {
+  "x": 75,
+  "y": 32,
+  "width": 49,
+  "height": 14,
+  "text": "03:50",
+  "confidence": 0.5
+ },
+ {
+  "confidence": 0.5,
+  "text": "Photos",
+  "height": 12,
+  "y": 84,
+  "width": 46,
+  "x": 154
+ },
+ {
+  "x": 249,
+  "text": "Collections",
+  "y": 84,
+  "width": 75,
+  "height": 12,
+  "confidence": 0.5
+ },
+ {
+  "height": 13,
+  "width": 196,
+  "text": "Private Access to Photos",
+  "confidence": 0.5,
+  "x": 181,
+  "y": 147
+ },
+ {
+  "confidence": 0.5,
+  "x": 208,
+  "width": 249,
+  "height": 14,
+  "text": "Your photo library is shown here, but",
+  "y": 175
+ },
+ {
+  "confidence": 0.5,
+  "text": "\"PDF Converter' can only access the",
+  "y": 197,
+  "height": 14,
+  "x": 209,
+  "width": 252
+ },
+ {
+  "confidence": 0.5,
+  "y": 219,
+  "height": 14,
+  "width": 114,
+  "x": 140,
+  "text": "items you select."
+ },
+ {
+  "y": 262,
+  "height": 12,
+  "confidence": 0.5,
+  "width": 97,
+  "x": 132,
+  "text": "Learn More..."
+ },
+ {
+  "confidence": 0.5,
+  "y": 814,
+  "width": 98,
+  "text": "Select Photos",
+  "height": 11,
+  "x": 201
+ },
+ {
+  "y": 832,
+  "confidence": 0.5,
+  "width": 98,
+  "height": 10,
+  "text": "Locatb)D Inclvded",
+  "x": 208
+ }
+]

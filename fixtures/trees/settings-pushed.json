@@ -1,0 +1,330 @@
+[
+ {
+  "index": 0,
+  "type": "Other",
+  "label": "Demo App",
+  "rect": {
+   "x": 0,
+   "y": 0,
+   "width": 402,
+   "height": 874
+  },
+  "enabled": true,
+  "hittable": false,
+  "ref": "e1"
+ },
+ {
+  "index": 1,
+  "parentIndex": 0,
+  "type": "NavigationBar",
+  "identifier": "Settings",
+  "rect": {
+   "x": 0,
+   "y": 62,
+   "width": 402,
+   "height": 54
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e2"
+ },
+ {
+  "index": 2,
+  "parentIndex": 1,
+  "type": "Button",
+  "label": "Back",
+  "rect": {
+   "x": 25,
+   "y": 66,
+   "width": 26,
+   "height": 36
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e3"
+ },
+ {
+  "index": 3,
+  "parentIndex": 1,
+  "type": "StaticText",
+  "label": "Settings",
+  "rect": {
+   "x": 167.66666666666666,
+   "y": 72.66666666666666,
+   "width": 66.66666666666666,
+   "height": 22.66666666666667
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e4"
+ },
+ {
+  "index": 4,
+  "parentIndex": 0,
+  "type": "ScrollView",
+  "rect": {
+   "x": 0,
+   "y": 116,
+   "width": 402,
+   "height": 696
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e5"
+ },
+ {
+  "index": 5,
+  "parentIndex": 4,
+  "type": "Button",
+  "label": "Upgrade, Unlock everything",
+  "rect": {
+   "x": 16,
+   "y": 124,
+   "width": 370,
+   "height": 77.66666666666666
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e6"
+ },
+ {
+  "index": 6,
+  "parentIndex": 5,
+  "type": "StaticText",
+  "label": "Try now",
+  "rect": {
+   "x": 300,
+   "y": 148,
+   "width": 74,
+   "height": 30
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e7"
+ },
+ {
+  "index": 7,
+  "parentIndex": 4,
+  "type": "StaticText",
+  "label": "GENERAL",
+  "rect": {
+   "x": 24,
+   "y": 221.66666666666666,
+   "width": 64.33333333333333,
+   "height": 14.333333333333343
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e8"
+ },
+ {
+  "index": 8,
+  "parentIndex": 4,
+  "type": "Button",
+  "label": "Language, English",
+  "rect": {
+   "x": 16,
+   "y": 244,
+   "width": 370,
+   "height": 52
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e9"
+ },
+ {
+  "index": 9,
+  "parentIndex": 4,
+  "type": "StaticText",
+  "label": "PURCHASES",
+  "rect": {
+   "x": 24,
+   "y": 316,
+   "width": 84.66666666666666,
+   "height": 14.333333333333371
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e10"
+ },
+ {
+  "index": 10,
+  "parentIndex": 4,
+  "type": "Button",
+  "label": "Restore purchases",
+  "rect": {
+   "x": 16,
+   "y": 338.3333333333333,
+   "width": 370,
+   "height": 52
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e11"
+ },
+ {
+  "index": 11,
+  "parentIndex": 4,
+  "type": "StaticText",
+  "label": "PRIVACY",
+  "rect": {
+   "x": 24,
+   "y": 410.3333333333333,
+   "width": 60,
+   "height": 14.333333333333314
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e12"
+ },
+ {
+  "index": 12,
+  "parentIndex": 4,
+  "type": "Button",
+  "label": "What leaves your device",
+  "rect": {
+   "x": 16,
+   "y": 432.66666666666663,
+   "width": 370,
+   "height": 52
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e13"
+ },
+ {
+  "index": 13,
+  "parentIndex": 4,
+  "type": "Button",
+  "label": "Privacy Policy, opens in Safari",
+  "rect": {
+   "x": 16,
+   "y": 485.66666666666663,
+   "width": 370,
+   "height": 52
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e14"
+ },
+ {
+  "index": 14,
+  "parentIndex": 4,
+  "type": "Button",
+  "label": "Terms of Use, opens in Safari",
+  "rect": {
+   "x": 16,
+   "y": 538.6666666666666,
+   "width": 370,
+   "height": 52
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e15"
+ },
+ {
+  "index": 15,
+  "parentIndex": 4,
+  "type": "StaticText",
+  "label": "SUPPORT",
+  "rect": {
+   "x": 24,
+   "y": 610.6666666666666,
+   "width": 66,
+   "height": 14.333333333333371
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e16"
+ },
+ {
+  "index": 16,
+  "parentIndex": 4,
+  "type": "Button",
+  "label": "Rate the app",
+  "rect": {
+   "x": 16,
+   "y": 633,
+   "width": 370,
+   "height": 52
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e17"
+ },
+ {
+  "index": 17,
+  "parentIndex": 4,
+  "type": "Button",
+  "label": "Share the app",
+  "rect": {
+   "x": 16,
+   "y": 686,
+   "width": 370,
+   "height": 52
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e18"
+ },
+ {
+  "index": 18,
+  "parentIndex": 4,
+  "type": "Button",
+  "label": "Send feedback",
+  "rect": {
+   "x": 16,
+   "y": 739,
+   "width": 370,
+   "height": 52
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e19"
+ },
+ {
+  "index": 19,
+  "parentIndex": 4,
+  "type": "StaticText",
+  "label": "ABOUT",
+  "rect": {
+   "x": 24,
+   "y": 811,
+   "width": 48.33333333333333,
+   "height": 1
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e20"
+ },
+ {
+  "index": 20,
+  "parentIndex": 0,
+  "type": "Button",
+  "rect": {
+   "x": 201,
+   "y": 478,
+   "width": 0,
+   "height": 0
+  },
+  "enabled": true,
+  "hittable": false,
+  "ref": "e21"
+ },
+ {
+  "index": 21,
+  "parentIndex": 0,
+  "type": "Toolbar",
+  "label": "Toolbar",
+  "identifier": "Toolbar",
+  "rect": {
+   "x": 0,
+   "y": 0,
+   "width": 402,
+   "height": 874
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e22"
+ }
+]

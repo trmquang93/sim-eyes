@@ -1,0 +1,197 @@
+[
+ {
+  "index": 0,
+  "type": "Other",
+  "label": "Demo App",
+  "rect": {
+   "x": 0,
+   "y": 0,
+   "width": 402,
+   "height": 874
+  },
+  "enabled": true,
+  "hittable": false,
+  "ref": "e1"
+ },
+ {
+  "index": 1,
+  "parentIndex": 0,
+  "type": "NavigationBar",
+  "identifier": "Rearrange pages",
+  "rect": {
+   "x": 0,
+   "y": 62,
+   "width": 402,
+   "height": 54
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e2"
+ },
+ {
+  "index": 2,
+  "parentIndex": 1,
+  "type": "Button",
+  "label": "Back",
+  "identifier": "BackButton",
+  "rect": {
+   "x": 16,
+   "y": 62,
+   "width": 44,
+   "height": 44
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e3"
+ },
+ {
+  "index": 3,
+  "parentIndex": 1,
+  "type": "StaticText",
+  "label": "Rearrange pages",
+  "rect": {
+   "x": 133.33333333333331,
+   "y": 72.66666666666666,
+   "width": 135,
+   "height": 22.66666666666667
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e4"
+ },
+ {
+  "index": 4,
+  "parentIndex": 0,
+  "type": "StaticText",
+  "label": "Drag and drop pages into the order you want",
+  "rect": {
+   "x": 65.33333333333334,
+   "y": 116,
+   "width": 271.33333333333326,
+   "height": 15.666666666666657
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e5"
+ },
+ {
+  "index": 5,
+  "parentIndex": 0,
+  "type": "ScrollView",
+  "rect": {
+   "x": 0,
+   "y": 147.66666666666666,
+   "width": 402,
+   "height": 602
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e6"
+ },
+ {
+  "index": 6,
+  "parentIndex": 5,
+  "type": "StaticText",
+  "label": "1",
+  "rect": {
+   "x": 111.78398369248688,
+   "y": 174.5,
+   "width": 6.333333333333314,
+   "height": 14.333333333333314
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e7"
+ },
+ {
+  "index": 7,
+  "parentIndex": 5,
+  "type": "StaticText",
+  "label": "2",
+  "rect": {
+   "x": 239.95065035915354,
+   "y": 174.5,
+   "width": 8,
+   "height": 14.333333333333314
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e8"
+ },
+ {
+  "index": 8,
+  "parentIndex": 5,
+  "type": "StaticText",
+  "label": "3",
+  "rect": {
+   "x": 368.78398369248686,
+   "y": 174.5,
+   "width": 8.333333333333314,
+   "height": 14.333333333333314
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e9"
+ },
+ {
+  "index": 9,
+  "parentIndex": 5,
+  "type": "StaticText",
+  "label": "4",
+  "rect": {
+   "x": 110.78398369248688,
+   "y": 346.67310924369747,
+   "width": 8.333333333333314,
+   "height": 14.333333333333371
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e10"
+ },
+ {
+  "index": 10,
+  "parentIndex": 5,
+  "type": "StaticText",
+  "label": "5",
+  "rect": {
+   "x": 239.95065035915354,
+   "y": 346.67310924369747,
+   "width": 8,
+   "height": 14.333333333333371
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e11"
+ },
+ {
+  "index": 11,
+  "parentIndex": 0,
+  "type": "Button",
+  "label": "Save",
+  "rect": {
+   "x": 20,
+   "y": 765.6666666666666,
+   "width": 362,
+   "height": 54.33333333333337
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e12"
+ },
+ {
+  "index": 12,
+  "parentIndex": 0,
+  "type": "Toolbar",
+  "label": "Toolbar",
+  "identifier": "Toolbar",
+  "rect": {
+   "x": 0,
+   "y": 0,
+   "width": 402,
+   "height": 874
+  },
+  "enabled": true,
+  "hittable": true,
+  "ref": "e13"
+ }
+]

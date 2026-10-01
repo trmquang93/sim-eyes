@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// The server must expose actions only through batch, so agents are steered to queue steps.
+// The server exposes the simulator only through batch, and inside batch only through act (plus open and record).
 const serverPath = join(dirname(fileURLToPath(import.meta.url)), "server.mjs");
 const child = spawn("node", [serverPath], {
   stdio: ["pipe", "pipe", "inherit"],
@@ -42,24 +42,32 @@ try {
   const batch = tools.find((t) => t.name === "batch");
   assert.match(batch.description, /\| tool \| Use when \|/);
   assert.match(batch.description, /\| act \|/);
-  // Agents must be told when tap beats act, and that "acted but not confirmed" is not a failure or a success.
-  assert.match(batch.description, /tap or act\?/);
-  assert.match(batch.description, /icon-only button/);
+  // Agents must be told there is nothing but act, and what a "not confirmed" result means.
+  assert.match(batch.description, /no tap, swipe, type, look or wait tools/);
   assert.match(batch.description, /acted but not confirmed/);
+  assert.match(batch.description, /drag \{"from":"1","to":"5"\}/);
   // Agents must be told to queue whole flows; one-step batches are the main cause of slow QA.
-  assert.match(batch.description, /Queue long batches/);
-  assert.match(init.result.instructions, /Queue long batches/);
+  assert.match(batch.description, /Queue whole flows/);
+  assert.match(init.result.instructions, /Queue whole flows/);
+  assert.match(init.result.instructions, /act-only|ONLY batch\.actions\[\], and there it is act/);
   assert.deepEqual(batch.inputSchema.required, ["app", "actions"]);
   assert.ok(batch.inputSchema.properties.session_id);
-  assert.ok(batch.inputSchema.properties.actions.items.properties.tool.enum.includes("act"));
-  assert.match(batch.inputSchema.properties.actions.description, /look, open, tap/);
+  assert.equal(batch.inputSchema.properties.image.type, "boolean");
+  assert.equal(batch.inputSchema.properties.continue_on_fail.type, "boolean");
+  const step = batch.inputSchema.properties.actions.items.properties;
+  assert.deepEqual(step.tool.enum, ["act", "open", "record"]);
+  for (const field of ["instruction", "text", "max_steps", "wait_ms", "drag", "long_press", "controls", "reset", "relaunch", "frames", "save"]) {
+    assert.ok(step[field], field);
+  }
+  assert.deepEqual(step.drag.required, ["from", "to"]);
 
   // app is required so the first snapshot cannot attach to SpringBoard and background the app under test.
   const acquire = tools.find((t) => t.name === "acquire");
   assert.deepEqual(acquire.inputSchema.required, ["app"]);
   assert.equal(acquire.inputSchema.properties.app.type, "string");
   assert.equal(batch.inputSchema.properties.app.type, "string");
-  assert.equal(batch.inputSchema.properties.actions.items.properties.relaunch.type, "boolean");
+  assert.equal(step.relaunch.type, "boolean");
+  assert.match(acquire.description, /never hands you a different one silently/);
 
   const statusTool = tools.find((t) => t.name === "status");
   assert.deepEqual(statusTool.inputSchema.required, ["session_id"]);
@@ -68,11 +76,15 @@ try {
   assert.equal(noSid.isError, true);
   assert.match(noSid.content[0].text, /requires session_id/);
 
-  for (const name of ["tap", "look", "type"]) {
+  // Calling a retired tool directly names the act step to send instead.
+  for (const name of ["tap", "look", "type", "swipe", "drag", "press", "wait"]) {
     const res = (await rpc("tools/call", { name, arguments: {} })).result;
     assert.equal(res.isError, true);
-    assert.match(res.content[0].text, /Call batch with actions/);
+    assert.match(res.content[0].text, /sim-eyes is act-only/);
+    assert.match(res.content[0].text, /"tool":"act"/);
   }
+  const direct = (await rpc("tools/call", { name: "act", arguments: {} })).result;
+  assert.match(direct.content[0].text, /batch step, not a tool/);
 
   const noApp = (await rpc("tools/call", { name: "batch", arguments: { actions: [{ tool: "look" }] } })).result;
   assert.equal(noApp.isError, true);
@@ -85,6 +97,13 @@ try {
   const bad = (await rpc("tools/call", { name: "batch", arguments: { app: "Settings", actions: [{ tool: "nope" }] } })).result;
   assert.equal(bad.isError, true);
   assert.match(bad.content[0].text, /batch cannot run "nope"/);
+
+  // A retired step is refused before anything touches the simulator, and the error says what to send.
+  for (const tool of ["tap", "look", "wait"]) {
+    const res = (await rpc("tools/call", { name: "batch", arguments: { app: "Settings", actions: [{ tool }] } })).result;
+    assert.equal(res.isError, true);
+    assert.match(res.content[0].text, new RegExp(`"${tool}" is not available: sim-eyes is act-only`));
+  }
 
   console.log("test-tools: ok");
 } finally {

@@ -1,0 +1,162 @@
+[
+ {
+  "confidence": 0.5,
+  "width": 50,
+  "x": 74,
+  "y": 32,
+  "height": 14,
+  "text": "03:58"
+ },
+ {
+  "text": "Tool",
+  "x": 42,
+  "y": 87,
+  "width": 52,
+  "height": 20,
+  "confidence": 0.5
+ },
+ {
+  "y": 202,
+  "text": "Image to PDF",
+  "confidence": 0.5,
+  "height": 15,
+  "width": 99,
+  "x": 82
+ },
+ {
+  "confidence": 0.5,
+  "text": "Scan to PDF",
+  "x": 269,
+  "y": 200,
+  "width": 90,
+  "height": 12
+ },
+ {
+  "y": 220,
+  "confidence": 0.5,
+  "width": 90,
+  "x": 78,
+  "height": 12,
+  "text": "Pirk photQS, gel"
+ },
+ {
+  "y": 234,
+  "text": "one document",
+  "height": 9,
+  "width": 81,
+  "x": 73,
+  "confidence": 0.5
+ },
+ {
+  "confidence": 0.5,
+  "text": "Use the camera, page",
+  "x": 285,
+  "y": 221,
+  "width": 122,
+  "height": 11
+ },
+ {
+  "y": 234,
+  "text": "by page",
+  "x": 246,
+  "width": 43,
+  "confidence": 0.5,
+  "height": 11
+ },
+ {
+  "confidence": 0.5,
+  "y": 327,
+  "x": 47,
+  "text": "Convert",
+  "width": 59,
+  "height": 12
+ },
+ {
+  "width": 66,
+  "confidence": 0.5,
+  "x": 59,
+  "text": "PDF to Word",
+  "y": 423,
+  "height": 9
+ },
+ {
+  "y": 423,
+  "confidence": 0.5,
+  "text": "PDF io PPT",
+  "x": 249,
+  "width": 59,
+  "height": 9
+ },
+ {
+  "height": 9,
+  "confidence": 0.5,
+  "x": 343,
+  "y": 423,
+  "width": 59,
+  "text": "POF io JPG"
+ },
+ {
+  "height": 19,
+  "y": 523,
+  "text": "Add images from",
+  "confidence": 0.5,
+  "x": 102,
+  "width": 148
+ },
+ {
+  "height": 13,
+  "x": 349,
+  "confidence": 0.5,
+  "width": 50,
+  "y": 522,
+  "text": "Cancel"
+ },
+ {
+  "height": 12,
+  "text": "Photo",
+  "x": 107,
+  "y": 582,
+  "confidence": 0.5,
+  "width": 41
+ },
+ {
+  "y": 601,
+  "width": 83,
+  "height": 12,
+  "text": "Media Library",
+  "confidence": 0.5,
+  "x": 127
+ },
+ {
+  "height": 12,
+  "text": "Camera",
+  "confidence": 0.5,
+  "x": 113,
+  "y": 667,
+  "width": 54
+ },
+ {
+  "y": 737,
+  "text": "Computer",
+  "width": 73,
+  "height": 14,
+  "confidence": 0.5,
+  "x": 122
+ },
+ {
+  "confidence": 0.5,
+  "y": 754,
+  "x": 117,
+  "width": 62,
+  "height": 10,
+  "text": "M&c or PC"
+ },
+ {
+  "confidence": 0.5,
+  "text": "Pick as rnany as you like. Pages follow the order you pi...",
+  "height": 13,
+  "y": 794,
+  "x": 201,
+  "width": 345
+ }
+]

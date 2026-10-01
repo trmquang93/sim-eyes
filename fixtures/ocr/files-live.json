@@ -1,0 +1,170 @@
+[
+ {
+  "text": "03:58",
+  "y": 32,
+  "x": 74,
+  "width": 50,
+  "height": 14,
+  "confidence": 0.5
+ },
+ {
+  "y": 92,
+  "width": 162,
+  "height": 11,
+  "confidence": 0.5,
+  "text": "Search file8 and contents",
+  "x": 137
+ },
+ {
+  "y": 196,
+  "height": 12,
+  "confidence": 0.5,
+  "width": 66,
+  "text": "ItnpDrtfile$",
+  "x": 62
+ },
+ {
+  "height": 10,
+  "y": 195,
+  "x": 172,
+  "confidence": 0.5,
+  "text": "Album",
+  "width": 37
+ },
+ {
+  "width": 63,
+  "height": 10,
+  "text": "Newfolder",
+  "confidence": 0.5,
+  "x": 313,
+  "y": 195
+ },
+ {
+  "width": 86,
+  "x": 60,
+  "height": 21,
+  "text": "My Files",
+  "confidence": 0.5,
+  "y": 254
+ },
+ {
+  "y": 295,
+  "width": 45,
+  "confidence": 0.5,
+  "text": "Recent",
+  "x": 102,
+  "height": 10
+ },
+ {
+  "height": 11,
+  "text": "Folders",
+  "y": 294,
+  "confidence": 0.5,
+  "x": 183,
+  "width": 49
+ },
+ {
+  "x": 267,
+  "y": 294,
+  "width": 53,
+  "confidence": 0.5,
+  "text": "Favorite",
+  "height": 11
+ },
+ {
+  "text": "Welcorne_to_PDF Converter.pdf",
+  "x": 194,
+  "confidence": 0.5,
+  "width": 214,
+  "y": 350,
+  "height": 13
+ },
+ {
+  "y": 367,
+  "width": 200,
+  "text": "0211012026 03-55 20 KB 5 pages",
+  "confidence": 0.5,
+  "height": 12,
+  "x": 187
+ },
+ {
+  "confidence": 0.5,
+  "text": "OF",
+  "width": 12,
+  "x": 52,
+  "y": 375,
+  "height": 7
+ },
+ {
+  "confidence": 0.5,
+  "width": 177,
+  "text": "ReadJny_Docurnent.docK",
+  "x": 176,
+  "y": 416,
+  "height": 13
+ },
+ {
+  "y": 434,
+  "height": 11,
+  "confidence": 0.5,
+  "x": 156,
+  "text": "0211012026 03-55 6 KB",
+  "width": 137
+ },
+ {
+  "width": 22,
+  "height": 7,
+  "x": 49,
+  "text": "DDC",
+  "confidence": 0.5,
+  "y": 442
+ },
+ {
+  "text": "Convert Your Files.xlsx",
+  "width": 156,
+  "confidence": 0.5,
+  "y": 481,
+  "x": 165,
+  "height": 11
+ },
+ {
+  "confidence": 0.5,
+  "width": 138,
+  "height": 11,
+  "text": "0211012026 03-.S4 6 KB",
+  "x": 156,
+  "y": 499
+ },
+ {
+  "height": 7,
+  "x": 49,
+  "confidence": 0.5,
+  "y": 508,
+  "width": 19,
+  "text": "XLS"
+ },
+ {
+  "y": 549,
+  "width": 179,
+  "confidence": 0.5,
+  "height": 13,
+  "text": "EdiLand_Al_Fe4tures.ppb(",
+  "x": 177
+ },
+ {
+  "x": 159,
+  "y": 566,
+  "confidence": 0.5,
+  "height": 10,
+  "text": "0211012026 03.54 21 KB",
+  "width": 143
+ },
+ {
+  "width": 12,
+  "x": 52,
+  "y": 574,
+  "height": 7,
+  "confidence": 0.5,
+  "text": "PT"
+ }
+]
