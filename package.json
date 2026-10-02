@@ -7,7 +7,9 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "test": "node test-pool.mjs && node test-batch-plan.mjs && node test-stale-sessions.mjs && node test-binding-prefer.mjs && node test-sessions.mjs && node test-targets.mjs && node test-act-direct.mjs && node test-cover-check.mjs && node test-tools.mjs && node test-tap-recovery.mjs && node test-act.mjs && node test-ocr.mjs"
+    "test": "node test-ad-command.mjs && node test-pool.mjs && node test-batch-plan.mjs && node test-stale-sessions.mjs && node test-binding-prefer.mjs && node test-sessions.mjs && node test-targets.mjs && node test-act-direct.mjs && node test-cover-check.mjs && node test-tools.mjs && node test-tap-recovery.mjs && node test-act.mjs && node test-ocr.mjs && node studio/test-phrases.mjs && node studio/test-map-line.mjs && node studio/test-step-report.mjs && node studio/test-run-test.mjs && node studio/test-store.mjs && node studio/test-builds.mjs && node studio/test-studio.mjs",
+    "studio": "node studio/studio.mjs",
+    "build-app": "bash app/build-app.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",

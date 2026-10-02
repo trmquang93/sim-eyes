@@ -1,0 +1,6 @@
+session_id=se-5d4f3dde497dd00fef0b1951
+1. look: done.
+   screen: "General" · back to "Settings" | texts: General / Manage your overall setup and preferences for iPhone, such as software updates,…
+   saved /tmp/run/01.png
+
+controls (9): Settings · General · com.apple.settings.general.fe… · About · Screen Capture · AutoFill & Passwords · Dictionary · Fonts · Keyboard

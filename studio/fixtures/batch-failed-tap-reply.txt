@@ -1,0 +1,18 @@
+session_id=se-5d4f3dde497dd00fef0b1951
+1. tap "Zzz Not A Control": the exact tap failed (No visible control or text labelled "Zzz Not A Control". Visible labels: "Settings", "General", "com.apple.settings.general.featureDescription", "About", "Screen Capture", "AutoFill & Passwords", "Dictionary", "Fonts", "Keyboard". Use goal for something you cannot name exactly, or tap_at for a control with no label.). Fell back to a goal:
+goal "tap "Zzz Not A Control"": stopped, no action on this screen helps. Word the goal as an end state, or use tap, scroll, drag and long_press steps. If the control appears after a delay (an ad's Close button, a loading screen), add a wait step before it.
+  note: the accessibility controls did not cover the goal, so screenshot text (OCR) is offered as tap targets
+The goal fallback failed too.
+   screen: "General" · back to "Settings" | texts: General / Manage your overall setup and preferences for iPhone, such as software updates,…
+   saved /tmp/run/01.png
+Step 1 needs your help: the exact tap and the goal fallback both failed, so do that tap yourself, with a batch (for example tap_at with a point read from the screenshot). It was the last step, so nothing remains.
+
+1. Settings (38, 84)
+2. General (201, 267)
+3. com.apple.settings.general.featureDescription (199, 267)
+4. About (201, 445)
+5. Screen Capture (201, 534)
+6. AutoFill & Passwords (201, 623)
+7. Dictionary (201, 677)
+8. Fonts (201, 731)
+9. Keyboard (201, 785)
