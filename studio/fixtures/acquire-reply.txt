@@ -1,0 +1,13 @@
+session_id=se-5d4f3dde497dd00fef0b1951 (new — pass this session_id on every later call)
+Acquired simulator for this session_id.
+instance: 16608-5a81d0
+pool: /Users/quang/.claude/skills/sim-pool/scripts/sim-pool
+client_session_id: se-5d4f3dde497dd00fef0b1951
+bound: yes
+agent_device_session: sim-eyes-16608-5a81d0-se-5d4f3dde497dd00fef0b1951
+udid: 8F395E81-CF05-425A-B3C8-CA63CFDE8FD6
+name: iPhone 17
+lease: 22f87bfc-2969-4d09-8bf3-291463a612b9
+expires: 2026-10-02T01:04:49+00:00
+
+Other session_ids get other free devices from sim-pool (or SIM_POOL_BUSY).

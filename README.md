@@ -104,3 +104,37 @@ Requires [agent-device](https://www.npmjs.com/package/agent-device) (`npx` is us
 | `SIM_EYES_PROJECT` / `SIM_EYES_WORKTREE` | Metadata recorded on the lease |
 
 Leases renew on every tool call; TTL + dead MCP pid recover orphans via sim-pool GC.
+
+## Studio (plain-text tests for testers)
+
+**Testers: use the Mac app.** `npm run build-app` makes `dist/SimEyesStudio.app` and `dist/SimEyesStudio.zip` (about 50 MB), which holds its own Node, agent-device, sim-pool and Studio. A tester needs only a Mac with Xcode installed and opened once:
+
+1. Unzip, drag `SimEyesStudio.app` to Applications.
+2. First open only: right-click the app, choose **Open**, then **Open** again (it is signed ad hoc, not notarized, so a plain double-click is refused). If macOS says it is damaged, run `xattr -dr com.apple.quarantine /Applications/SimEyesStudio.app` once.
+3. The small window starts Studio and opens the page in the browser. On the first run it lets sim-pool lease the Mac's iPhone simulators (`sim-pool init`). The TypeSafe key is bundled at build time (`TYPESAFE_API_KEY` or git-ignored `app/typesafe.key`; the build fails without one), so testers configure nothing. Anyone who has the app can extract that key, so use a key you can revoke. **TypeSafe Key…** optionally stores their own key in the Keychain instead (it restarts Studio, after asking if a test is running). Quitting the app stops Studio; so does a crash of the app.
+
+If something breaks, `~/Library/Logs/SimEyesStudio.log` has Studio's output. Build for another chip with `ARCH=x86_64 npm run build-app` (default is this Mac's chip). The build downloads the official Node from nodejs.org and checks its SHA-256; `NODE_MAJOR`, `AGENT_DEVICE_VERSION` and `SIM_POOL_SRC` override the pinned inputs.
+
+Developers can still run it from source:
+
+A local web page where a tester writes a test case as sentences, runs it on a leased simulator and reviews the result. It is an MCP client of `server.mjs`, so the tools agents use do not change.
+
+```
+npm run studio            # http://127.0.0.1:4777, opens the browser (--no-open, --port <n>, --root <dir>)
+```
+
+Needs a free sim-pool simulator to run, and `TYPESAFE_API_KEY` to read lines that are not a fixed phrase (without it those lines are saved as goals). Tests live in `~/sim-eyes-tests/` (`SIM_EYES_STUDIO_ROOT` or `--root`), as JSON files per project:
+
+```
+<project>/project.json   tests/<test>.json   builds/<build>/<App>.app   runs/<test>/<YYYYMMDD-HHMMSS>/{run.json,NN.png,video.mp4,sheet.png}
+```
+
+**Writing a test.** One step per line; a line starting with `#` is a note. Fixed phrases become exact steps with no model call: `Tap "Files"`, `Tap the 2nd "Folder"`, `Tap at 120, 340`, `Type "x" into "Name"` (+ `and press return`), `Scroll down 2 times`, `Go back`, `Wait 2 seconds`, `Press return`, `Hide the keyboard`, `Long press "X"`, `Drag "A" to "B"`, `Open the app` / `Restart the app` / `Open the app fresh`, and `Check …` / `Verify …` / `Expect …` / `Make sure …` (a screenshot shown next to the sentence; nobody judges it but the reviewer). Any other line goes to TypeSafe on save, which only *selects* the kind of step and a label or text among the words of the line; below 0.7 confidence it becomes a `goal` whose end state is the line. The editor shows how every line was mapped. Unchanged lines keep their mapping on later saves.
+
+**Running.** The start is per test: *fresh* (reinstall the app, needs the bundle id), *restart* or *as is*. One run at a time, one batch call per step, a screenshot after each step and a video of the run. The first step that fails ends the run (**Failed**, with the reason and its screenshot). A busy pool is **Inconclusive**. The reviewer then sets **Pass** or **Fail** and a note; that verdict is separate from the run status and is kept in `run.json`.
+
+**Builds.** Drop a simulator `.app`, an `.ipa` that holds one, or a `.zip` on the project's Builds box (or use *Choose file…*). Every run installs the selected build on the leased simulator before the start step (`xcrun simctl install`), so a run always tests a known build; its version and build number are recorded in `run.json`. A device build is refused. To make a simulator build, a developer picks an iPhone simulator in Xcode and builds (arm64 on Apple silicon), then zips the `.app` from Products, or runs `xcodebuild -sdk iphonesimulator`. A dropped `.app` folder is rebuilt file by file and checked with `codesign`; if that fails, zip it in Finder and drop the zip.
+
+Do not use real credentials in tests: typed text and screenshots are stored in plain files.
+
+Checks: `npm test` (no simulator), `node studio/eval-map.mjs` (TypeSafe), `node studio/test-studio-live.mjs` (needs a free simulator).

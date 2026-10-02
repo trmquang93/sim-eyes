@@ -1,3 +1,8 @@
 node_modules/
 work/
 .DS_Store
+dist/
+.cache/
+app/typesafe.key
+promo/out/
+promo/stills/

@@ -1,0 +1,30 @@
+{"line":"press the Done button","expect":{"tool":"tap","label":"Done"}}
+{"line":"select the Settings tab","expect":{"tool":"tap","label":"Settings"}}
+{"line":"hit Save","expect":{"tool":"tap","label":"Save"}}
+{"line":"touch the Wi-Fi row","expect":{"tool":"tap","label":"Wi-Fi"}}
+{"line":"select Dark Mode","expect":{"tool":"tap","label":"Dark Mode"}}
+{"line":"press the Cancel button","expect":{"tool":"tap","label":"Cancel"}}
+{"line":"tap the New Folder icon","expect":{"tool":"tap","label":"New Folder"}}
+{"line":"enter QA-T1 in the Name field","expect":{"tool":"type","text":"QA-T1","into":"Name"}}
+{"line":"fill the Search box with invoice","expect":{"tool":"type","text":"invoice","into":"Search"}}
+{"line":"write hello world into the Notes field","expect":{"tool":"type","text":"hello world","into":"Notes"}}
+{"line":"input 4242 in the Card number field","expect":{"tool":"type","text":"4242","into":"Card number"}}
+{"line":"navigate to the previous screen","expect":{"tool":"back"}}
+{"line":"return to the previous page","expect":{"tool":"back"}}
+{"line":"move down the list 3 times","expect":{"tool":"scroll","direction":"down"}}
+{"line":"swipe the list up twice","expect":{"tool":"scroll","direction":"up"}}
+{"line":"scroll to the right","expect":{"tool":"scroll","direction":"right"}}
+{"line":"see that the folder QA-T1 appears in the list","expect":{"tool":"look"}}
+{"line":"confirm the title reads About","expect":{"tool":"look"}}
+{"line":"the screen should show the iOS version","expect":{"tool":"look"}}
+{"line":"make a new folder called QA-T1","expect":{"tool":"goal","text":"QA-T1"}}
+{"line":"open the About page","expect":{"tool":"goal","text":null}}
+{"line":"delete the folder QA-T1 and confirm","expect":{"tool":"goal","text":null}}
+{"line":"search for invoice and open the first result","expect":{"tool":"goal"}}
+{"line":"sign in with the test account","expect":{"tool":"goal"}}
+{"line":"rename the file Report to Report2","expect":{"tool":"goal","text":"Report2"}}
+{"line":"turn on Airplane Mode","expect":{"tool":"goal","text":null}}
+{"line":"share the PDF by email","expect":{"tool":"goal"}}
+{"line":"tap Files and then tap General","expect":{"tool":"goal"}}
+{"line":"allow notifications when asked","expect":{"tool":"goal"}}
+{"line":"change the language to French","expect":{"tool":"goal"}}

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { actOptions, actState, decideStep, effectRecord, effectText, screenSignature, stepRecord } from "./act.mjs";
+import { actOptions, actState, decideStep, effectRecord, effectText, screenSignature, stepRecord, trustedAction } from "./act.mjs";
 import { screenContext } from "./targets.mjs";
 
 const targets = [
@@ -137,6 +137,30 @@ assert.deepEqual(
   const record = { ...stepRecord({ kind: "tap", target: targets[0] }, "Language"), effect: effectRecord({ changed: 5, bandChanged: 5 }) };
   const state = actState({ instruction: "select English", targets, history: [record] });
   assert.deepEqual(state.stepsTaken[0].effect, { screenChanged: true, changedAtControl: true });
+}
+
+// A greyed-out row of a file picker ignores the tap. The goal must go on to the next row at modest
+// confidence instead of stopping (the user's "select pdf file" run stopped after one tap), but never
+// retap the same control, and a first tap still needs the full bar.
+{
+  const tapOf = (label, confidence, ocr = true) => ({ confidence, action: { kind: "tap", target: { label, ...(ocr ? { ocr: true } : {}) } } });
+  const idle = [{ action: "tap", control: "Café Été", readFromScreenshot: true, effect: { screenChanged: false, changedAtControl: false } }];
+  const worked = [{ action: "tap", control: "Café Été", effect: { screenChanged: true, changedAtControl: true } }];
+  assert.equal(trustedAction(tapOf("clip", 0.55), idle), true, "another row after a tap that changed nothing is tried at 0.55");
+  assert.equal(trustedAction(tapOf("Café Été", 0.95), idle), false, "the same control again is never trusted");
+  assert.equal(trustedAction(tapOf("clip", 0.15), idle), false, "below the retry bar stops");
+  assert.equal(trustedAction({ ...tapOf("clip", 0.55), runnerUp: { key: "tap 9", probability: 0.4 } }, worked), false, "after a tap that worked the full bar applies without a clear lead");
+  assert.equal(trustedAction(tapOf("clip", 0.55), []), true, "a first tap on a screenshot row that clearly leads needs only 0.5");
+  assert.equal(trustedAction({ ...tapOf("clip", 0.55), runnerUp: { key: "tap 9", probability: 0.4 } }, []), false, "without a clear lead the full bar applies");
+  assert.equal(trustedAction({ ...tapOf("clip", 0.45), runnerUp: { key: "tap 9", probability: 0.05 } }, []), false, "below the lead bar stops");
+  assert.equal(trustedAction(tapOf("clip", 0.75), []), true);
+  assert.equal(trustedAction(tapOf("Continue", 0.55, false), idle), false, "an accessibility control is not retried at the lower bar");
+  const idleAx = [{ action: "tap", control: "English", effect: { screenChanged: false, changedAtControl: false } }];
+  assert.equal(trustedAction(tapOf("Continue", 0.55, false), idleAx), false, "after an idle accessibility control the full bar applies");
+  assert.equal(stepRecord({ kind: "tap", target: { label: "clip", ocr: true } }, null).readFromScreenshot, true);
+  assert.equal("readFromScreenshot" in stepRecord({ kind: "tap", target: { label: "Next" } }, null), false);
+  assert.equal(trustedAction({ confidence: 0.55, action: { kind: "swipe", direction: "up" } }, idle), false, "a swipe is not retried at the lower bar");
+  assert.equal(trustedAction({ confidence: 0.9, action: null }, idle), false);
 }
 
 console.log("test-act: ok");
