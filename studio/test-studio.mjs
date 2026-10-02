@@ -51,6 +51,9 @@ const waitFor = async (fn) => {
 };
 
 try {
+  // The launcher and the review page show which code is running: VERSION in a downloaded bundle, package.json otherwise.
+  assert.equal((await call("GET", "/api/status")).data.bundleVersion, JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")).version);
+
   assert.equal((await call("POST", "/api/projects", { name: "Settings QA", app: "com.apple.Preferences" })).status, 200);
   assert.equal((await call("POST", "/api/projects/settings-qa/tests", { name: "Open About" })).data.slug, "open-about");
   assert.equal((await call("POST", "/api/projects/settings-qa/tests", { name: "Open About" })).status, 409);

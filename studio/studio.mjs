@@ -7,7 +7,7 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, rm, stat } from "node:fs/promises";
+import { mkdir, readFile, rm, stat } from "node:fs/promises";
 import http from "node:http";
 import { dirname, extname, join } from "node:path";
 import { Transform } from "node:stream";
@@ -20,10 +20,14 @@ import { runTest } from "./run-test.mjs";
 import * as store from "./store.mjs";
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), "public");
+const CODE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 const MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_FILE_BYTES = 1024 * 1024 * 1024;
 const STARTS = ["fresh", "relaunch", "as-is"];
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json", ".png": "image/png", ".jpg": "image/jpeg", ".mp4": "video/mp4", ".txt": "text/plain; charset=utf-8" };
+
+/** The version of the code folder this Studio runs from: `VERSION` in a downloaded bundle, else package.json. */
+const codeVersion = async () => (await readFile(join(CODE_DIR, "VERSION"), "utf8").catch(() => ""))?.trim() || JSON.parse(await readFile(join(CODE_DIR, "package.json"), "utf8")).version;
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -147,7 +151,7 @@ export async function startStudio({ root = store.defaultRoot(), port = 4777, ope
   const route = (method, pattern, handler) => routes.push({ method, re: new RegExp(`^${pattern}$`), handler });
   const S = "([^/]+)";
 
-  route("GET", "/api/status", async () => ({ typesafe: Boolean(process.env.TYPESAFE_API_KEY), root, activeRun: active }));
+  route("GET", "/api/status", async () => ({ typesafe: Boolean(process.env.TYPESAFE_API_KEY), root, activeRun: active, bundleVersion: await codeVersion() }));
   route("GET", "/api/projects", async () => store.listProjects(root));
   route("POST", "/api/projects", async (req) => {
     const { name, app } = await readJsonBody(req);

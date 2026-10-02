@@ -1,11 +1,13 @@
 #!/bin/bash
 # Builds dist/SimEyesStudio.app (+ .zip): Swift launcher, a pinned official Node, Studio, agent-device and sim-pool.
-# Needs on this Mac: Xcode command line tools (swiftc), npm, curl, and the TypeSafe key to bundle (TYPESAFE_API_KEY or app/typesafe.key). Run: npm run build-app
+# Needs on this Mac: Xcode command line tools (swiftc), npm, curl, and app/release-public.pem (node scripts/release-bundle.mjs --keygen).
+# The app holds no TypeSafe key: it reaches TypeSafe through the hub (HUB_URL) with the tester's invite token. Run: npm run build-app
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 NODE_MAJOR="${NODE_MAJOR:-24}"          # agent-device needs Node >= 22.12
-AGENT_DEVICE_VERSION="${AGENT_DEVICE_VERSION:-0.21.19}"
+AGENT_DEVICE_VERSION="${AGENT_DEVICE_VERSION:-$(node -p "require('$REPO/package.json').simEyes.agentDevice")}"   # one pin: the release script hashes it
+HUB_URL="${HUB_URL:-https://sim-eyes.unitvn.com}"
 SIM_POOL_SRC="${SIM_POOL_SRC:-$HOME/.claude/skills/sim-pool/scripts/sim-pool}"
 ARCH="${ARCH:-$(uname -m)}"             # arm64 or x86_64
 case "$ARCH" in arm64) NODE_ARCH=arm64 ;; x86_64) NODE_ARCH=x64 ;; *) echo "ARCH must be arm64 or x86_64" >&2; exit 1 ;; esac
@@ -14,6 +16,7 @@ DIST="$REPO/dist"
 APP="$DIST/SimEyesStudio.app"
 CACHE="$REPO/.cache/node"
 VERSION="$(node -p "require('$REPO/package.json').version")"
+[ -f "$REPO/app/release-public.pem" ] || { echo "app/release-public.pem is missing: run node scripts/release-bundle.mjs --keygen" >&2; exit 1; }
 [ -f "$SIM_POOL_SRC" ] || { echo "sim-pool not found at $SIM_POOL_SRC (set SIM_POOL_SRC)" >&2; exit 1; }
 
 # 1. Official Node, checked against nodejs.org's published SHA-256.
@@ -50,12 +53,17 @@ done
 cp -R studio/public "$RES/sim-eyes/studio/public"
 ( cd "$RES/sim-eyes" && PATH="$(dirname "$RES/node"):$PATH" npm install --omit=dev --no-audit --no-fund --silent && npm install --no-save --omit=dev --no-audit --no-fund --silent "agent-device@$AGENT_DEVICE_VERSION" )
 
-# 3b. The TypeSafe key the app ships with (env TYPESAFE_API_KEY, else app/typesafe.key, which is git-ignored).
-KEY="${TYPESAFE_API_KEY:-}"
-if [ -z "$KEY" ] && [ -f app/typesafe.key ]; then KEY="$(tr -d '[:space:]' < app/typesafe.key)"; fi
-[ -n "$KEY" ] || { echo "No TypeSafe key to bundle: set TYPESAFE_API_KEY or put it in app/typesafe.key" >&2; exit 1; }
-printf '%s' "$KEY" > "$RES/typesafe.key"
-chmod 600 "$RES/typesafe.key"
+# 3b. What the updater needs, next to the code and outside any bundle: the updater itself, the public key it checks signatures with,
+# and app.json (hub address, this app's version, and the hash of the dependencies a bundle must have been built for).
+cp "$REPO/app/AppIcon.icns" "$RES/"
+cp "$REPO/app/updater.mjs" "$REPO/app/bundle-format.mjs" "$REPO/app/release-public.pem" "$RES/"
+printf '%s\n' "$VERSION" > "$RES/sim-eyes/VERSION"
+node --input-type=module -e "
+import { readFileSync, writeFileSync } from 'node:fs';
+import { depsHash } from '$REPO/app/bundle-format.mjs';
+const pkg = JSON.parse(readFileSync('$REPO/package.json', 'utf8'));
+writeFileSync('$RES/app.json', JSON.stringify({ hubUrl: '$HUB_URL', appVersion: pkg.version, arch: '$ARCH', depsHash: depsHash(pkg.dependencies, '$AGENT_DEVICE_VERSION') }, null, 2) + '\n');
+"
 
 # 4. Launcher.
 sed "s/__VERSION__/$VERSION/" app/Info.plist > "$APP/Contents/Info.plist"
