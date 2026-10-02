@@ -41,7 +41,7 @@ Evidence: `.local/qa-evidence/npm-install/` (git-ignored). Gate: `npm test` gree
 - [x] Published `sim-eyes@1.6.0` by the owner (the account needed 2FA enabled first).
 - [x] Post-publish check: `npx -y sim-eyes@1.6.0 doctor` from an empty temp dir, all PASS, and `claude mcp add sim-eyes -- npx -y sim-eyes` connects → `post-publish-doctor.txt` (criterion 12).
 - [x] Confirm MIT + "Copyright (c) 2026 Quang Tran" in `LICENSE`.
-- [x] Done 2026-10-02: `publish-app` and `release-bundle --publish` for app 1.6.0 (download served, sha256 `2c6e90a7092e…` matches; manifest answers 401 without a token). Old 1.5.x apps now say old 1.5.x apps will say "needs a newer app" (proved in `updater-test.txt`, real hashes). 
+- [x] Done 2026-10-02: `publish-app` and `release-bundle --publish` for app 1.6.0 (download served, sha256 `2c6e90a7092e…` matches; manifest answers 401 without a token). Old 1.5.x apps now say "needs a newer app" (proved in `updater-test.txt`, real hashes). 
 - [ ] Intel (x86_64) slice of `bin/ocr` is built but unrun: no Rosetta here (`lipo-codesign.txt`).
 - [x] Merged as PR #3.
 
