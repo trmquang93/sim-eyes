@@ -1,6 +1,6 @@
 # Install the MCP without the source (npm package) — Implementation Plan
 
-**Status:** Implemented 2026-10-02 on `feat/npm-install` (see Progress). Waiting on the owner: `npm login`, `npm publish`, post-publish check, and the VPS app/bundle publish. All decisions below were made with the owner (see [Questions & Decisions](#questions--decisions)).
+**Status:** Implemented and **published as `sim-eyes@1.6.0` on 2026-10-02** (shasum `c04943902c713dce514c0fb409c4e428c8944fb1`, equal to the dry run). Waiting on the owner: PR merge and the VPS app/bundle publish. All decisions below were made with the owner (see [Questions & Decisions](#questions--decisions)).
 
 > **HANDOFF NOTICE — read this before starting work.**
 >
@@ -38,9 +38,9 @@ Evidence: `.local/qa-evidence/npm-install/` (git-ignored). Gate: `npm test` gree
 - The Mac app was launched with an isolated `HOME` next to the owner's running 1.5.1 app (port 4777 stayed theirs; the new one fell back to a free port). It shares `~/Library/Logs/SimEyesStudio.log`.
 
 **Still open (owner):**
-- [ ] `npm login` (`npm whoami` fails here), then `npm publish` (2FA). Command: `cd /Volumes/T7/Projects/open-source/sim-eyes && npm publish`.
-- [ ] Post-publish check: `npx -y sim-eyes@1.6.0 doctor` from an empty temp dir and `claude mcp add sim-eyes -- npx -y sim-eyes` → `post-publish-doctor.txt` (criterion 12).
-- [ ] Confirm MIT + "Copyright (c) 2026 Quang Tran" in `LICENSE`.
+- [x] Published `sim-eyes@1.6.0` by the owner (the account needed 2FA enabled first).
+- [x] Post-publish check: `npx -y sim-eyes@1.6.0 doctor` from an empty temp dir, all PASS, and `claude mcp add sim-eyes -- npx -y sim-eyes` connects → `post-publish-doctor.txt` (criterion 12).
+- [x] Confirm MIT + "Copyright (c) 2026 Quang Tran" in `LICENSE`.
 - [ ] Decide on the VPS publish (`publish-app`, `release-bundle --publish`) for app 1.6.0: old 1.5.x apps will say "needs a newer app" (proved in `updater-test.txt`, real hashes). Not run.
 - [ ] Intel (x86_64) slice of `bin/ocr` is built but unrun: no Rosetta here (`lipo-codesign.txt`).
 - [ ] Merge: open a PR from `feat/npm-install` (not opened).
