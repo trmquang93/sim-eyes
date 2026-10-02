@@ -28,3 +28,6 @@
 {"case":"close the ad: closed, other screen has its own ad #1","expect":"done","instruction":"close the ad","tree":"language-after-interstitial","history":[{"action":"tap","control":"Close","effect":{"screenChanged":true,"changedAtControl":true}}]}
 {"case":"close the ad: tap changed nothing #1","expect":"stop","instruction":"close the ad","tree":"interstitial-ad","history":[{"action":"tap","control":"Close","effect":{"screenChanged":false,"changedAtControl":false}}]}
 {"case":"close the ad: closed, validator popup on next screen #1","expect":"done","instruction":"close the ad","tree":"language-leftover-consent","history":[{"action":"tap","control":"Close","effect":{"screenChanged":true,"changedAtControl":true}}]}
+{"case": "Select mode lives in the options menu", "expect": "tap 9", "instruction": "enter Select mode and select the file Read_Any_Document.docx", "tree": "files-live"}
+{"case": "switch the list to grid view (options menu)", "expect": "tap 9", "instruction": "switch the file list to grid view", "tree": "files-live"}
+{"case": "a listed control still wins over a menu", "expect": "tap 4", "instruction": "create a new folder", "tree": "files-live"}

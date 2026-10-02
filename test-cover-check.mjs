@@ -15,13 +15,27 @@ const cover = (tree, ocr) => screenCover(listTargets(read(`trees/${tree}`)), rea
   assert.ok(found.texts.includes("Collections") && found.texts.includes("Private Access to Photos"));
   assert.ok(!found.texts.includes("03:50"), "the status bar clock is not screen content");
   assert.match(coveredScreenLine(found), /covered by a view outside the app's accessibility tree.*Collections/);
-  assert.match(coveredControlsLine(), /tap <text>/);
+  assert.match(coveredControlsLine(), /"tool":"tap","label":"<text>"/);
+}
+
+// A picker whose screen is a photo grid has only its "Photos" / "Collections" tabs to read: still a cover, not a blank screen.
+{
+  const found = cover("files-live", "photos-picker-grid");
+  assert.equal(found.hidden, true);
+  assert.deepEqual(found.texts, ["Photos", "Collections"]);
 }
 
 // Real screens of the app, read the same way, are never reported as covered: label-less content (a PDF page),
 // icon-only buttons and a fast OCR that garbles words must not trigger it.
 for (const name of ["language-picker", "tool-home-live", "settings-live", "pdf-viewer-live", "files-live", "add-images-sheet-live"]) {
   assert.equal(cover(name, name).hidden, false, `${name} is not covered`);
+}
+
+// A dialog with its keyboard up: the tree lists unlabeled controls under their type names ("TextField", "Button") and the keys'
+// icon buttons, none of which is readable text. Only "Cancel" is a real label, so there is too little to call the tree hidden.
+{
+  const found = cover("rename-dialog-keyboard", "rename-dialog-keyboard");
+  assert.equal(found.hidden, false);
 }
 
 // Too few controls, or nothing readable on screen, say too little to call the tree hidden.

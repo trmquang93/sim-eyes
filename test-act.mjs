@@ -130,6 +130,8 @@ assert.deepEqual(
   assert.match(effectText({ screenChanged: false, changedAtControl: false }), /no effect/);
   assert.match(effectText({ screenChanged: true, changedAtControl: true }), /at the tapped control/);
   assert.match(effectText({ screenChanged: true, changedAtControl: false }), /elsewhere than the tapped control/);
+  assert.match(effectText({ screenChanged: true, changedAtControl: true, nudged: true }), /exact center did nothing/);
+  assert.doesNotMatch(effectText({ screenChanged: true, changedAtControl: true }), /exact center/);
   assert.equal(effectText(undefined), "");
   // TypeSafe sees the effect through the step record it already receives.
   const record = { ...stepRecord({ kind: "tap", target: targets[0] }, "Language"), effect: effectRecord({ changed: 5, bandChanged: 5 }) };

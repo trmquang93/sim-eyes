@@ -6,7 +6,8 @@ export const ACT_CONFIDENCE_MIN = 0.7;
 /** At or above this, the instruction counts as fulfilled. */
 export const ACT_DONE_MIN = 0.7;
 export const ACT_DEFAULT_STEPS = 5;
-export const ACT_MAX_STEPS = 10;
+/** A goal that spans a whole stretch of a flow needs room: the loop stops early once the screen confirms it. */
+export const ACT_MAX_STEPS = 25;
 
 const SWIPES = ["up", "down", "left", "right"];
 const SWIPE_MEANING = {
@@ -94,8 +95,10 @@ export function effectRecord(diff) {
 export function effectText(effect) {
   if (!effect) return "";
   if (!effect.screenChanged) return "left the screen unchanged, so it probably had no effect";
-  if (effect.changedAtControl) return "changed the screen at the tapped control";
-  return "changed the screen elsewhere than the tapped control (navigation, a pager, a sheet)";
+  const where = effect.changedAtControl
+    ? "changed the screen at the tapped control"
+    : "changed the screen elsewhere than the tapped control (navigation, a pager, a sheet)";
+  return effect.nudged ? `${where} (the tap on its exact center did nothing; it took effect a few points off center)` : where;
 }
 
 /** Stable text of what the screen offers, to spot an action repeated on an unchanged screen. */
@@ -130,6 +133,7 @@ export const NEXT_QUESTION = {
   rules: [
     "If a visible control's label names the destination, or the screen on the way to it, tap that control.",
     "If the control the instruction needs is itself tagged [covered by popup \"name\"] in `hierarchy`, first tap that popup's Dismiss or Close control. A control tagged [not listed] is disabled or unavailable, and dismissing a popup does not help it.",
+    "A goal with several parts (\"enter Select mode and select the file\") is done in order: pick the action for the first part that is not done yet. A mode or action the list does not show (Select, Sort, View as, Filter) usually lives in an options or overflow control (a label such as \"View and filter options\", \"More\", \"Options\", \"Menu\", \"Actions\", \"Filter\"): tap that control first (this is for an action or mode, not for a screen to open: a screen that is not listed is further down, so swipe up). A control whose label names the destination still wins over a menu.",
     "When no control in `controls` names the destination or a screen on the way to it, swipe up: a screen opens scrolled to its top, so rows that are not listed yet are below. Do not tap an unrelated control to look for it. Swipe down only after an earlier swipe up in `stepsTaken` on this screen went past it.",
     "If `textToType` is set and the instruction needs text in a field, fill that field. Focusing a field without filling it does not help.",
     "When the last step in `stepsTaken` is \"fill field\" and the instruction asks to search or submit, press return.",
@@ -194,7 +198,7 @@ export function typesafeClient() {
   const apiKey = process.env.TYPESAFE_API_KEY;
   if (!apiKey) {
     throw new Error(
-      "act needs TYPESAFE_API_KEY in the sim-eyes MCP env for any goal code cannot answer. Only \"tap <exact label>\", \"go back\", drag and long_press run without it."
+      "goal needs TYPESAFE_API_KEY in the sim-eyes MCP env. Every other step (tap, tap_at, back, scroll, swipe, type, key, drag, long_press, wait, look) runs without it."
     );
   }
   return new TypeSafeClient({ apiKey });

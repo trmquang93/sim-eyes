@@ -1,31 +1,46 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { BACK_GOAL, directTapTarget, dragEnds, gestureNode } from "./act-direct.mjs";
+import { BACK_GOAL, backTargets, dragEnds, gestureNode, tapGoalNames, tapTarget } from "./act-direct.mjs";
 import { controlsLine, screenLine } from "./screen-summary.mjs";
 import { listTargets, screenContext } from "./targets.mjs";
 
 const tree = (name) => JSON.parse(readFileSync(new URL(`./fixtures/trees/${name}.json`, import.meta.url)));
 
-// "tap <label>" is answered by code only when exactly one control has that exact label.
+// The `tap` step is answered by code only when the label matches exactly; several matches need nth, never a guess.
 {
   const targets = [
     { n: 1, label: "Next", x: 200, y: 800 },
     { n: 2, label: "Skip", x: 360, y: 80 },
-    { n: 3, label: "Save", x: 100, y: 700 },
-    { n: 4, label: "Save", x: 300, y: 700 },
+    { n: 3, label: "Save", x: 300, y: 700 },
+    { n: 4, label: "Save", x: 100, y: 700 },
   ];
-  assert.equal(directTapTarget("tap Next", targets)?.n, 1);
-  assert.equal(directTapTarget('Tap "Skip"', targets)?.n, 2);
-  assert.equal(directTapTarget("press the Next button", targets)?.n, 1);
-  assert.equal(directTapTarget("select next", targets)?.n, 1, "labels match case-insensitively");
-  assert.equal(directTapTarget("tap Save", targets), null, "two Save controls: let the model judge from context");
-  assert.equal(directTapTarget("tap Settings", targets), null, "no such label");
-  assert.equal(directTapTarget("tap Next then tap Skip", targets), null, "two goals are not a label");
-  assert.equal(directTapTarget("scroll down", targets), null);
+  assert.equal(tapTarget({ label: "Next" }, targets).n, 1);
+  assert.equal(tapTarget({ label: '"Skip"' }, targets).n, 2, "quotes around the label are ignored");
+  assert.equal(tapTarget({ label: "next" }, targets).n, 1, "labels match case-insensitively");
+  assert.throws(() => tapTarget({ label: "Save" }, targets), /2 controls are labelled "Save": 1\. "Save" at \(100, 700\); 2\. "Save" at \(300, 700\)\. Pass nth/);
+  assert.equal(tapTarget({ label: "Save", nth: 1 }, targets).n, 4, "nth counts top to bottom, then left to right");
+  assert.equal(tapTarget({ label: "Save", nth: 2 }, targets).n, 3);
+  assert.throws(() => tapTarget({ label: "Save", nth: 3 }, targets), /nth 3 is out of range: 2 match/);
+  assert.throws(() => tapTarget({ label: "Settings" }, targets), /No visible control or text labelled "Settings"\. Visible labels: "Next", "Skip", "Save"\..*goal.*tap_at/);
+  assert.throws(() => tapTarget({ label: "Nex" }, targets), /No visible control/, "a prefix is not the label");
+  assert.throws(() => tapTarget({ label: "" }, targets), /tap needs a label/);
+  assert.throws(() => tapTarget({}, targets), /tap needs a label/);
 }
 
-// A list row's title is text, not a control. "tap <exact title>" taps it when one visible text has that
-// title; a near-duplicate title never matches, so the original file is not tapped for its renamed copy.
+// A text field is named by its placeholder ("Search files and contents"): tap finds it, and a label that is not the placeholder still fails.
+{
+  const targets = [
+    { n: 1, label: "TextField", placeholder: "Search files and contents", value: "", editable: true, x: 215, y: 92 },
+    { n: 2, label: "Cancel", x: 363, y: 92 },
+  ];
+  assert.equal(tapTarget({ label: "Search files and contents" }, targets).n, 1);
+  assert.equal(tapTarget({ label: "search files and contents" }, targets).n, 1, "case aside");
+  assert.throws(() => tapTarget({ label: "Search files" }, targets), /No visible control/, "a prefix of the placeholder is not the name");
+  assert.throws(() => tapTarget({ label: "Search files and contents" }, [{ ...targets[0], editable: false }]), /No visible control/, "only text fields are named by placeholder");
+}
+
+// A list row's title is text, not a control. `tap` taps it when one visible text has that exact title; a
+// near-duplicate title never matches, so the original file is not tapped for its renamed copy.
 {
   const rect = { x: 20, y: 300, width: 200, height: 20 };
   const text = (label, y) => ({ index: y, parentIndex: 0, type: "StaticText", label, enabled: true, rect: { ...rect, y } });
@@ -37,12 +52,13 @@ const tree = (name) => JSON.parse(readFileSync(new URL(`./fixtures/trees/${name}
     text("Dup", 480),
   ];
   const none = [];
-  assert.deepEqual(directTapTarget("tap Sample.pdf", none, nodes), { n: 0, label: "Sample.pdf", x: 120, y: 310, text: true });
-  assert.equal(directTapTarget("tap Sample_renamed.pdf", none, nodes).y, 370);
-  assert.equal(directTapTarget("tap Sample", none, nodes), null, "a prefix is not the title");
-  assert.equal(directTapTarget("tap Dup", none, nodes), null, "two texts with that title: ambiguous");
+  assert.deepEqual(tapTarget({ label: "Sample.pdf" }, none, nodes), { n: 0, label: "Sample.pdf", x: 120, y: 310, text: true });
+  assert.equal(tapTarget({ label: "Sample_renamed.pdf" }, none, nodes).y, 370);
+  assert.throws(() => tapTarget({ label: "Sample" }, none, nodes), /No visible control or text/, "a prefix is not the title");
+  assert.throws(() => tapTarget({ label: "Dup" }, none, nodes), /2 controls are labelled "Dup"/);
+  assert.equal(tapTarget({ label: "Dup", nth: 2 }, none, nodes).y, 490);
   const control = [{ n: 1, label: "Sample.pdf", x: 5, y: 5 }];
-  assert.equal(directTapTarget("tap Sample.pdf", control, nodes).n, 1, "a control wins over a text");
+  assert.equal(tapTarget({ label: "Sample.pdf" }, control, nodes).n, 1, "a control wins over a text");
 }
 
 // The Rearrange editor's page badges are not controls, but a drag can address them by label or point.
@@ -89,20 +105,31 @@ const tree = (name) => JSON.parse(readFileSync(new URL(`./fixtures/trees/${name}
   );
   const controls = controlsLine(listTargets(home));
   assert.match(controls, /^controls \(\d+\): Settings · Image to PDF/);
-  assert.match(controls, /\+\d+ more$/);
+  assert.match(controls, /… \+\d+ more … · /);
   assert.equal(controlsLine([]), "controls: none");
+  // A cut list keeps the labels at the bottom of the screen (the tab bar), which an agent needs to switch tabs.
+  const many = Array.from({ length: 20 }, (_, i) => ({ label: i >= 16 ? ["Create", "Tool", "Files", "Settings"][i - 16] : `Row ${i}` }));
+  assert.equal(controlsLine(many), "controls (20): Row 0 · Row 1 · Row 2 · Row 3 · Row 4 · Row 5 · Row 6 · Row 7 · Row 8 · Row 9 · … +6 more … · Create · Tool · Files · Settings");
+  assert.equal(controlsLine(many.slice(0, 14)), `controls (14): ${many.slice(0, 14).map((t) => t.label).join(" · ")}`, "a list that fits is shown whole");
+}
+
+// The `back` step is the one Back control of a pushed screen; a root screen has none. A goal of "go back" is recognised by BACK_GOAL.
+{
+  const pushed = [{ n: 1, label: "Back", x: 38, y: 84, back: true }, { n: 2, label: "Save", x: 363, y: 84, back: false }];
+  assert.deepEqual(backTargets(pushed).map((t) => t.n), [1]);
+  assert.deepEqual(backTargets([{ n: 3, label: "Back", x: 42, y: 84 }, pushed[1]]).map((t) => t.n), [3], "a custom Back control labelled Back counts");
+  assert.deepEqual(backTargets([pushed[1]]), [], "no Back control on a root screen");
+  assert.ok(BACK_GOAL.test("go back") && BACK_GOAL.test("Navigate back") && !BACK_GOAL.test("tap Back"));
+}
+
+// A model-driven tap of the control a goal names ("tap the Back chevron") is confirmed by the screen change.
+{
+  assert.ok(tapGoalNames("tap the Back chevron", "Back"));
+  assert.ok(tapGoalNames("press Save", "save"));
+  assert.ok(!tapGoalNames("tap Save as new document", "Save"), "a longer name is a different control");
+  assert.ok(!tapGoalNames("tap Backup", "Back"));
+  assert.ok(!tapGoalNames("go back", "Back"), "only tap goals are confirmed by the tap itself");
+  assert.ok(!tapGoalNames("tap Done", ""));
 }
 
 console.log("test-act-direct: ok");
-
-// "go back" is the one Back button of a pushed screen, answered by code; a root screen has none.
-{
-  const pushed = [{ n: 1, label: "Back", x: 38, y: 84, back: true }, { n: 2, label: "Save", x: 363, y: 84, back: false }];
-  assert.equal(directTapTarget("go back", pushed)?.n, 1);
-  assert.equal(directTapTarget("Navigate back", pushed)?.n, 1);
-  assert.equal(directTapTarget("back", pushed)?.n, 1);
-  assert.equal(directTapTarget("go back", [{ n: 3, label: "Back", x: 42, y: 84 }, pushed[1]])?.n, 3, "a custom Back control labelled Back counts");
-  assert.equal(directTapTarget("go back", [pushed[1]]), null, "no Back button: the model (or the 'nothing to go back to' message) answers");
-  assert.equal(directTapTarget("go back to the file list", pushed), null, "a destination is not a plain go back");
-  assert.ok(BACK_GOAL.test("go back") && !BACK_GOAL.test("tap Back"));
-}

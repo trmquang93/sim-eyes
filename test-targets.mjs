@@ -4,6 +4,7 @@ import {
   behindModal,
   exactLabelMatches,
   formatTargets,
+  keyboardShown,
   listTargets,
   screenContext,
   formatTree,
@@ -165,6 +166,29 @@ assert.deepEqual(consentTargets.map((t) => t.label), ["Settings"]);
     { index: 5, parentIndex: 4, type: "Key", label: "a", enabled: true, rect: { x: 10, y: 620, width: 30, height: 40 } },
   ];
   assert.equal(behindModal(keyboard).size, 0);
+
+  // A dialog with its text field focused has the keyboard's keys in its own layer. It is still the screen on top:
+  // the Files list and the tab bar's Create button under it are not listed, and the dialog's texts describe the screen.
+  const dialog = tree("files-new-folder-dialog");
+  // Its Create button is disabled while the name is empty, and the tab bar's Create (hittable in the tree) is behind it: no "Create" at all.
+  assert.deepEqual(listTargets(dialog).map((t) => t.label), ["Cell", "TextField", "Cancel"]);
+  assert.deepEqual(screenContext(dialog).texts, ["New folder"]);
 }
 
+// A search field with focus brings the keyboard up. The keyboard layer (keys, prediction bar, dock buttons) comes after the
+// tab bar's Toolbar and holds a ScrollView and labelled buttons, but it is not a screen: the app's controls stay tappable and
+// the focused field is found, so `type` and `tap` keep working. (Regression: the app's tree vanished and only keys were listed.)
+{
+  const focused = listTargets(JSON.parse(readFileSync(new URL("./fixtures/trees/files-search-focused.json", import.meta.url))));
+  const labels = focused.map((t) => t.label);
+  for (const label of ["TextField", "Cancel", "Create", "Tool", "Files", "More actions for QAFolder"]) assert.ok(labels.includes(label), label);
+  const field = focused.find((t) => t.label === "TextField");
+  assert.equal(field.editable, true);
+  assert.equal(field.placeholder, "Search files and contents");
+  // The current tab is marked, so tapping it again is not a failed tap.
+  assert.equal(focused.find((t) => t.label === "Files").selected, true);
+  assert.equal(focused.find((t) => t.label === "Tool").selected, false);
+  assert.equal(keyboardShown(JSON.parse(readFileSync(new URL("./fixtures/trees/files-search-focused.json", import.meta.url)))), true);
+  assert.equal(keyboardShown([{ type: "Button" }]), false);
+}
 console.log("test-targets: ok");

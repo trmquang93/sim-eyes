@@ -6,8 +6,8 @@ const STATUS_BAR_Y = 50;
 const MIN_CONTROLS = 5;
 /** The tree is hidden when at most this share of its control labels can be read on screen. */
 const MAX_SEEN_SHARE = 0.2;
-/** A hidden tree needs some text on screen to be a screen at all, not a blank or loading one. */
-const MIN_SCREEN_LINES = 3;
+/** A hidden tree needs some text on screen to be a screen at all, not a blank or loading one. A photo grid reads as just its two tab names. */
+const MIN_SCREEN_LINES = 2;
 
 const norm = (text) => String(text).toLowerCase().replace(/\s+/g, " ").trim();
 const readable = (item) => item.y > STATUS_BAR_Y && item.confidence >= OCR_CONFIDENCE_MIN && /\p{L}/u.test(item.text ?? "");
@@ -22,7 +22,8 @@ const mentions = (line, label) => line.includes(label) || (line.length >= 3 && l
 export function screenCover(targets, ocrItems) {
   const items = ocrItems.filter(readable);
   const lines = items.map((i) => norm(i.text));
-  const labels = [...new Set(targets.filter((t) => !t.ocr).map((t) => norm(t.label)).filter((l) => l.length >= 3))];
+  // A control with no accessibility label is listed under its type ("TextField", "Button"): that name is never on screen, so it says nothing about the cover.
+  const labels = [...new Set(targets.filter((t) => !t.ocr && t.labeled !== false).map((t) => norm(t.label)).filter((l) => l.length >= 3))];
   const seen = labels.filter((label) => lines.some((line) => mentions(line, label)));
   const hidden = labels.length >= MIN_CONTROLS && lines.length >= MIN_SCREEN_LINES && seen.length / labels.length <= MAX_SEEN_SHARE;
   return { hidden, texts: items.map((i) => i.text.trim()) };

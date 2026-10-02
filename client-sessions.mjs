@@ -13,6 +13,8 @@ import { randomBytes } from "node:crypto";
  *   recordingPath: string | null,
  *   screenSize: { width: number, height: number },
  *   releasing: boolean,
+ *   shortBatches: number,
+ *   paused: { rest: object[], image: boolean, start: number } | null,
  * }} ClientSession */
 
 export function newSessionId() {
@@ -34,6 +36,10 @@ export function createClientSession(id) {
     recordingPath: null,
     screenSize: { width: 402, height: 874 },
     releasing: false,
+    // Short driving batches in a row (see shortBatchReminder).
+    shortBatches: 0,
+    // Steps a batch left waiting when it asked the agent for help; the continue tool runs them.
+    paused: null,
   };
 }
 

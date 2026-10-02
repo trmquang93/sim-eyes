@@ -13,46 +13,77 @@ function labelCandidates(instruction) {
   if (!m) return [];
   const written = m[1].replace(QUOTES, "").trim();
   const withoutArticle = written.replace(/^(?:the|a|an)\s+/i, "");
-  const withoutKind = withoutArticle.replace(/\s+(?:button|tab|row|cell|link|option|icon)$/i, "");
+  const withoutKind = withoutArticle.replace(/\s+(?:button|tab|row|cell|link|option|icon|chevron|arrow)$/i, "");
   return [...new Set([written, withoutArticle, withoutKind].filter(Boolean))];
 }
 
-/** The one visible text with this exact label, as a point to tap: a list row's title is text, not a control. */
-function uniqueText(nodes, label) {
-  const needle = label.trim().toLowerCase();
-  const hits = visibleNodes(nodes).filter(
-    (n) =>
-      n.type === "StaticText" &&
-      n.rect && n.rect.width > 0 && n.rect.height > 0 &&
-      n.interactionBlocked !== "covered" &&
-      String(n.label ?? "").trim().toLowerCase() === needle
-  );
-  if (hits.length !== 1) return null;
-  const { rect } = hits[0];
-  return { n: 0, label: hits[0].label, x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2), text: true };
+/**
+ * Whether a "tap <label>" goal names the control that was just tapped ("tap the Back chevron" names
+ * "Back"). The screen after such a tap cannot show that it happened, so a visible change confirms it.
+ */
+export function tapGoalNames(instruction, label) {
+  const name = String(label ?? "").trim().toLowerCase();
+  return name !== "" && labelCandidates(instruction).some((c) => c.toLowerCase() === name);
 }
 
+/** The text fields whose placeholder or current value is exactly this text. */
+function fieldsNamed(targets, name) {
+  const needle = name.toLowerCase();
+  return targets.filter((t) => t.editable && [t.placeholder, t.value].some((v) => v && String(v).trim().toLowerCase() === needle));
+}
+
+/** Every visible text with this exact label, as points to tap: a list row's title is text, not a control. */
+function textTargets(nodes, label) {
+  const needle = label.trim().toLowerCase();
+  return visibleNodes(nodes)
+    .filter(
+      (n) =>
+        n.type === "StaticText" &&
+        n.rect && n.rect.width > 0 && n.rect.height > 0 &&
+        n.interactionBlocked !== "covered" &&
+        String(n.label ?? "").trim().toLowerCase() === needle
+    )
+    .map((n) => ({
+      n: 0,
+      label: n.label,
+      x: Math.round(n.rect.x + n.rect.width / 2),
+      y: Math.round(n.rect.y + n.rect.height / 2),
+      text: true,
+    }));
+}
+
+const reading = (t) => `${JSON.stringify(t.label)} at (${t.x}, ${t.y})`;
+
 /**
- * The one control a plain "tap <label>" instruction names, or null. Code answers here, so the
- * step needs no model call: it applies only when exactly one control has that exact label, or,
- * when no control has it, exactly one visible text does (a file row). Near matches are never taken.
+ * The control a `tap` step names. Code answers, no model call. The label must match a visible control exactly
+ * (case aside); when no control has it, a visible text with that exact label (a file row) is tapped. Several
+ * matches are an error that lists them, unless `nth` (1-based, top to bottom, then left to right) picks one.
+ * A near match is never taken.
  */
-export function directTapTarget(instruction, targets, nodes = []) {
-  if (BACK_GOAL.test(instruction.trim())) {
-    const backs = backTargets(targets);
-    return backs.length === 1 ? backs[0] : null;
+export function tapTarget({ label, nth } = {}, targets, nodes = []) {
+  const wanted = String(label ?? "").replace(QUOTES, "").trim();
+  if (!wanted) throw new Error('tap needs a label: the exact label of a visible control, e.g. {"tool":"tap","label":"Next"}.');
+  let found = exactLabelMatches(targets, wanted);
+  // A text field is named by its placeholder ("Search files and contents"), not by its label.
+  if (found.length === 0) found = fieldsNamed(targets, wanted);
+  if (found.length === 0) found = textTargets(nodes, wanted);
+  if (found.length === 0) {
+    const seen = [...new Set(targets.map((t) => t.label).filter(Boolean))].slice(0, 25).map((l) => JSON.stringify(l));
+    throw new Error(
+      `No visible control or text labelled ${JSON.stringify(wanted)}. Visible labels: ${seen.join(", ") || "none"}. ` +
+        `Use goal for something you cannot name exactly, or tap_at for a control with no label.`
+    );
   }
-  const labels = labelCandidates(instruction);
-  for (const label of labels) {
-    const matches = exactLabelMatches(targets, label);
-    if (matches.length === 1) return matches[0];
-    if (matches.length > 1) return null;
+  found = [...found].sort((a, b) => a.y - b.y || a.x - b.x);
+  if (nth != null) {
+    const i = Math.round(Number(nth));
+    if (!(i >= 1 && i <= found.length)) throw new Error(`nth ${nth} is out of range: ${found.length} match(es) for ${JSON.stringify(wanted)}: ${found.map(reading).join("; ")}.`);
+    return found[i - 1];
   }
-  for (const label of labels) {
-    const text = uniqueText(nodes, label);
-    if (text) return text;
+  if (found.length > 1) {
+    throw new Error(`${found.length} controls are labelled ${JSON.stringify(wanted)}: ${found.map((t, i) => `${i + 1}. ${reading(t)}`).join("; ")}. Pass nth (1-based, in this order) or use tap_at.`);
   }
-  return null;
+  return found[0];
 }
 
 const area = (n) => n.rect.width * n.rect.height;

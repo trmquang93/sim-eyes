@@ -80,6 +80,20 @@ export function staleDialogBranches(nodes) {
 
 const CONTENT_TYPES = new Set(["NavigationBar", "ScrollView", "CollectionView", "Table", "WebView"]);
 
+const KEYBOARD_IDS = new Set(["inputView", "SystemInputAssistantView", "UIKeyboardLayoutStar Preview"]);
+
+/** A top-level branch of the on-screen keyboard (its keys, prediction bar, dock buttons), not of the app. */
+function isKeyboardBranch(node) {
+  return (
+    KEYBOARD_IDS.has(node.identifier) ||
+    /^(?:UIKeyboard|TUI|_UIRemoteKeyboard)/.test(node.role ?? "") ||
+    (node.type === "Button" && node.label === "Next keyboard")
+  );
+}
+
+/** Whether the keyboard is up: the snapshot has keys. */
+export const keyboardShown = (nodes) => nodes.some((n) => n.type === "Key");
+
 /**
  * Indexes of nodes that belong to the screen under a presented sheet. iOS keeps the presenting
  * screen in the accessibility tree: the sheet's branches come first, then a full-screen Toolbar
@@ -106,12 +120,19 @@ export function behindModal(nodes) {
     const l = layerOf(node);
     if (l != null) members[l].push(node);
   }
-  const hasContent = members.map(
-    (inLayer) =>
+  // A layer that is only a keyboard does not count: its prediction bar is a ScrollView and its dock buttons are labelled,
+  // so the keyboard's own branches are left out when judging a layer. A dialog whose text field has the keyboard up still
+  // counts: its keys sit beside it in the same layer, so the layer needs a labelled node that is not a key.
+  const isKey = (n) => /^Key(board)?$/.test(n.type);
+  const keyboardBranches = new Set(nodes.filter((n) => n.parentIndex === root.index && isKeyboardBranch(n)).map((n) => n.index));
+  const hasContent = members.map((all) => {
+    const inLayer = all.filter((n) => !keyboardBranches.has(topBranch(n, byIndex)?.index));
+    return (
       inLayer.some((n) => n.rect && n.rect.width >= 8 && n.rect.height >= 8) &&
       inLayer.some((n) => CONTENT_TYPES.has(n.type)) &&
-      !inLayer.some((n) => /^Key(board)?$/.test(n.type))
-  );
+      (!inLayer.some(isKey) || inLayer.some((n) => !isKey(n) && n.label))
+    );
+  });
   const first = hasContent.indexOf(true);
   if (first < 0 || hasContent.lastIndexOf(true) === first) return new Set();
   const top = hasContent[layer] ? layer : first;
@@ -225,6 +246,7 @@ export function listTargets(allNodes) {
       x: c.x,
       y: c.y,
       editable: !!isField,
+      selected: node.selected === true,
       back: node.identifier === "BackButton",
       labeled: !!node.label,
       placeholder: placeholder && placeholder !== label ? placeholder : "",
