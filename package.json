@@ -1,22 +1,74 @@
 {
   "name": "sim-eyes",
-  "version": "1.5.1",
-  "type": "module",
-  "bin": {
-    "sim-eyes": "./server.mjs"
+  "version": "1.6.0",
+  "description": "MCP server that lets an agent look at and drive one iOS simulator, with one exclusive simulator per agent.",
+  "keywords": [
+    "mcp",
+    "ios",
+    "simulator",
+    "xcode",
+    "testing",
+    "agent",
+    "qa"
+  ],
+  "homepage": "https://github.com/trmquang93/sim-eyes#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/trmquang93/sim-eyes.git"
   },
+  "bugs": {
+    "url": "https://github.com/trmquang93/sim-eyes/issues"
+  },
+  "license": "MIT",
+  "type": "module",
+  "os": [
+    "darwin"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "bin": {
+    "sim-eyes": "./cli.mjs"
+  },
+  "files": [
+    "cli.mjs",
+    "doctor.mjs",
+    "server.mjs",
+    "act.mjs",
+    "act-direct.mjs",
+    "ad-command.mjs",
+    "batch-plan.mjs",
+    "binding-prefer.mjs",
+    "client-sessions.mjs",
+    "cover-check.mjs",
+    "ocr.mjs",
+    "ocr.swift",
+    "pool.mjs",
+    "screen-summary.mjs",
+    "session-schema.mjs",
+    "stale-sessions.mjs",
+    "tap-recovery.mjs",
+    "targets.mjs",
+    "vendor/",
+    "bin/",
+    "LICENSE",
+    "README.md"
+  ],
   "scripts": {
     "start": "node server.mjs",
-    "test": "node test-ad-command.mjs && node test-pool.mjs && node test-batch-plan.mjs && node test-stale-sessions.mjs && node test-binding-prefer.mjs && node test-sessions.mjs && node test-targets.mjs && node test-act-direct.mjs && node test-cover-check.mjs && node test-tools.mjs && node test-tap-recovery.mjs && node test-act.mjs && node test-ocr.mjs && node studio/test-phrases.mjs && node studio/test-map-line.mjs && node studio/test-step-report.mjs && node studio/test-run-test.mjs && node studio/test-store.mjs && node studio/test-builds.mjs && node studio/test-studio.mjs && node hub/test-tokens.mjs && node hub/test-hub.mjs && node app/test-updater.mjs && node test-release-bundle.mjs && node hub/test-home.mjs && node test-publish-app.mjs",
+    "test": "node test-pack.mjs && node test-cli.mjs && node test-doctor.mjs && node test-ocr-binary.mjs && node test-ad-command.mjs && node test-pool.mjs && node test-batch-plan.mjs && node test-stale-sessions.mjs && node test-binding-prefer.mjs && node test-sessions.mjs && node test-targets.mjs && node test-act-direct.mjs && node test-cover-check.mjs && node test-tools.mjs && node test-tap-recovery.mjs && node test-act.mjs && node test-ocr.mjs && node studio/test-phrases.mjs && node studio/test-map-line.mjs && node studio/test-step-report.mjs && node studio/test-run-test.mjs && node studio/test-store.mjs && node studio/test-builds.mjs && node studio/test-studio.mjs && node hub/test-tokens.mjs && node hub/test-hub.mjs && node app/test-updater.mjs && node test-release-bundle.mjs && node hub/test-home.mjs && node test-publish-app.mjs",
     "studio": "node studio/studio.mjs",
     "build-app": "bash app/build-app.sh",
     "hub": "node hub/hub.mjs",
     "release-bundle": "node scripts/release-bundle.mjs",
-    "publish-app": "node scripts/publish-app.mjs"
+    "publish-app": "node scripts/publish-app.mjs",
+    "build-ocr": "node scripts/build-ocr.mjs",
+    "prepublishOnly": "npm test && node scripts/build-ocr.mjs && node test-pack.mjs --require-binary"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@typesafe-ai/sdk": "^0.6.0",
+    "agent-device": "0.21.19",
     "zod": "^3.24.2"
   },
   "simEyes": {

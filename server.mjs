@@ -10,7 +10,7 @@
  */
 import { execFileSync, spawn } from "node:child_process";
 import { appendFile, copyFile, cp, mkdir, readFile, rm } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -49,7 +49,7 @@ import {
   releaseLease,
   renewLease,
 } from "./pool.mjs";
-import { parseAdCommand } from "./ad-command.mjs";
+import { adCommandFromHost } from "./ad-command.mjs";
 import { preferDiffersFromBinding, preferHonored, SESSION_ID_RULE } from "./binding-prefer.mjs";
 import {
   SessionRegistry,
@@ -86,13 +86,10 @@ function prefixSession(result, sessionId, created) {
 }
 
 function adCommand() {
-  if (process.env.SIM_EYES_AD) return parseAdCommand(process.env.SIM_EYES_AD);
-  if (existsSync("/opt/homebrew/bin/agent-device"))
-    return ["/opt/homebrew/bin/agent-device"];
-  if (existsSync("/usr/local/bin/agent-device"))
-    return ["/usr/local/bin/agent-device"];
-  const bin = npxAgentDevice();
-  return bin === "npx" ? ["npx", "-y", "agent-device"] : [bin];
+  return adCommandFromHost(() => {
+    const bin = npxAgentDevice();
+    return bin === "npx" ? ["npx", "-y", "agent-device"] : [bin];
+  });
 }
 
 let cachedNpxBin = null;
@@ -1032,7 +1029,7 @@ ${BATCH_ACTION_CATALOG}
 Example (one call for a whole flow; exact steps where the label is known, a goal where it is not): { "app": "com.example.app", "actions": [{ "tool": "tap", "label": "Settings" }, { "tool": "goal", "goal": "open the About screen under General", "max_steps": 12 }, { "tool": "scroll", "direction": "down", "times": 2 }, { "tool": "tap", "label": "Save", "save": "/abs/path/evidence/saved.png" }, { "tool": "goal", "goal": "get back to the Settings home screen", "max_steps": 12 }] }`;
 
 const server = new Server(
-  { name: "sim-eyes", version: "1.4.0" },
+  { name: "sim-eyes", version: JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version },
   { capabilities: { tools: {} }, instructions: INSTRUCTIONS }
 );
 

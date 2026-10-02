@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 
 /** Exit 2 from sim-pool = no free simulator. */
@@ -17,19 +18,61 @@ export function defaultInstanceId() {
   return `${process.pid}-${randomBytes(3).toString("hex")}`;
 }
 
-export function findSimPoolBin() {
-  if (process.env.SIM_POOL_BIN) return process.env.SIM_POOL_BIN;
-  const candidates = [
-    join(homedir(), ".claude", "skills", "sim-pool", "scripts", "sim-pool"),
-    join(homedir(), ".agents", "skills", "sim-pool", "scripts", "sim-pool"),
-    join(homedir(), ".cursor", "skills", "sim-pool", "scripts", "sim-pool"),
-  ];
-  return candidates.find((p) => existsSync(p)) ?? null;
+const VENDORED = join(dirname(fileURLToPath(import.meta.url)), "vendor", "sim-pool", "sim-pool");
+
+/**
+ * Which sim-pool to run: `SIM_POOL_BIN`, then the user's own skill, then the copy this package carries. The skill wins over
+ * the vendored copy because both keep lease state in the same folder and may not be the same version. The vendored one
+ * runs through python3: npm does not keep the exec bit.
+ */
+export function resolveSimPool({ env = process.env, home = homedir(), exists = existsSync, vendored = VENDORED } = {}) {
+  const direct = (path, source) => ({ path, source, command: path, args: [] });
+  if (env.SIM_POOL_BIN) return direct(env.SIM_POOL_BIN, "env");
+  const skill = [".claude", ".agents", ".cursor"]
+    .map((dir) => join(home, dir, "skills", "sim-pool", "scripts", "sim-pool"))
+    .find((p) => exists(p));
+  if (skill) return direct(skill, "skill");
+  if (exists(vendored)) return { path: vendored, source: "vendored", command: "python3", args: [vendored] };
+  return null;
 }
 
-function run(bin, args, { timeoutMs = 120000 } = {}) {
+export function findSimPoolBin(options) {
+  return resolveSimPool(options)?.path ?? null;
+}
+
+const CLT_HINT = "sim-pool needs python3 from the Xcode Command Line Tools: run `xcode-select --install`, then retry.";
+
+/**
+ * Make sure the pool has a whitelist: the first time on a Mac, `sim-pool init` lists its iPhone simulators (it never
+ * creates one). `init` keeps an existing config, so an empty whitelist is redone with --force (nothing to lose).
+ */
+export async function ensurePoolConfigured({ run, home = homedir(), env = process.env, readConfig = readJsonOrNull }) {
+  const config = readConfig(join(env.AGENT_SIM_POOL_HOME ?? join(home, ".agent-sim-pool"), "config.json"));
+  if (config?.devices?.length) return { initialized: false };
+  const { code, stdout, stderr } = await run(config ? ["init", "--force"] : ["init"]);
+  if (code !== 0) throw new Error(`sim-pool init failed: ${(stderr || stdout).trim() || `exit ${code}`}\n${CLT_HINT}`);
+  const devices = Number(stdout.match(/devices=(\d+)/)?.[1] ?? 0);
+  if (devices === 0) {
+    throw new Error(
+      "No iPhone simulator found for sim-pool to lease. Create one in Xcode (Window > Devices and Simulators), then retry."
+    );
+  }
+  return { initialized: true, devices };
+}
+
+function readJsonOrNull(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+let poolReady = false;
+
+function run(pool, args, { timeoutMs = 120000 } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(pool.command, [...pool.args, ...args], { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {
@@ -41,6 +84,10 @@ function run(bin, args, { timeoutMs = 120000 } = {}) {
     });
     child.stderr.on("data", (d) => {
       stderr += d;
+    });
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      resolve({ code: 1, stdout, stderr: `${pool.command}: ${err.message}` });
     });
     child.on("close", (code) => {
       clearTimeout(timer);
@@ -73,11 +120,11 @@ export async function acquireLease({
   ttl,
   timeout = 5,
 } = {}) {
-  const bin = findSimPoolBin();
+  const bin = resolveSimPool();
   if (!bin) {
     throw new Error(
-      "sim-pool not found. Install the sim-pool skill, or set SIM_POOL_BIN. " +
-        "Without a pool, parallel agents fight over one simulator."
+      "sim-pool not found: this install is missing its vendored copy (vendor/sim-pool). Reinstall sim-eyes, " +
+        "or install the sim-pool skill, or set SIM_POOL_BIN. Without a pool, parallel agents fight over one simulator."
     );
   }
   const session = `sim-eyes-${instanceId}`;
@@ -98,6 +145,10 @@ export async function acquireLease({
   if (ttl) args.push("--ttl", String(ttl));
   if (preferUdid) args.push("--prefer-udid", preferUdid);
 
+  if (!poolReady) {
+    await ensurePoolConfigured({ run: (initArgs) => run(bin, initArgs, { timeoutMs: 60000 }) });
+    poolReady = true;
+  }
   const { code, stdout, stderr } = await run(bin, args);
   if (code === 2) {
     throw new PoolBusyError(
@@ -124,7 +175,7 @@ export async function acquireLease({
 }
 
 export async function renewLease(leaseId) {
-  const bin = findSimPoolBin();
+  const bin = resolveSimPool();
   if (!bin || !leaseId) return;
   const { code, stderr, stdout } = await run(bin, ["renew", "--lease", leaseId], {
     timeoutMs: 30000,
@@ -135,13 +186,13 @@ export async function renewLease(leaseId) {
 }
 
 export async function releaseLease(leaseId) {
-  const bin = findSimPoolBin();
+  const bin = resolveSimPool();
   if (!bin || !leaseId) return;
   await run(bin, ["release", "--lease", leaseId], { timeoutMs: 30000 });
 }
 
 export async function poolStatusText() {
-  const bin = findSimPoolBin();
+  const bin = resolveSimPool();
   if (!bin) return "sim-pool: not installed";
   const { stdout, stderr, code } = await run(bin, ["status"], { timeoutMs: 30000 });
   return code === 0 ? stdout.trim() : (stderr || stdout).trim();
