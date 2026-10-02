@@ -15,6 +15,14 @@ const DUPLICATE_DISTANCE = 20;
 const BLOCK_LEFT_TOLERANCE = 8;
 /** ...and the gap between them is at most this fraction of the smaller line's height. */
 const BLOCK_LINE_GAP = 0.4;
+/** A grid cell centers its lines (a Files item: name, date, size), and its lines sit further apart than a list row's. */
+const CELL_LINE_GAP = 1.2;
+/**
+ * In the Files picker's grid the name does not respond to a tap: the picture above it does. A cell (stacked,
+ * centered lines whose later lines read as a size, a date or "N items") is tapped this far (points) above its text.
+ */
+const CELL_PICTURE_OFFSET = 40;
+const CELL_DETAIL = /^\s*(\d+([.,]\d+)?\s?(bytes?|[KMG]B|items?)|\d{1,2}[/.]\d{1,2}[/.]\d{2,4}|\d{1,2}:\d{2}|Yesterday|Today)\s*$/i;
 
 function run(file, args, timeout) {
   return new Promise((resolve, reject) => {
@@ -70,15 +78,17 @@ function mergeLines(items) {
     .map((i) => ({ text: i.text.trim(), left: i.x - i.width / 2, right: i.x + i.width / 2, top: i.y - i.height / 2, bottom: i.y + i.height / 2, height: i.height }))
     .sort((a, b) => a.top - b.top || a.left - b.left);
   const blocks = [];
+  const center = (l) => (l.left + l.right) / 2;
   for (const line of lines) {
-    const block = blocks.find(
-      (b) =>
-        Math.abs(b.lastLeft - line.left) <= BLOCK_LEFT_TOLERANCE &&
-        line.top - b.bottom <= Math.min(b.lastHeight, line.height) * BLOCK_LINE_GAP &&
-        line.top >= b.top
-    );
+    const block = blocks.find((b) => {
+      const gap = line.top - b.bottom;
+      const smaller = Math.min(b.lastHeight, line.height);
+      const leftAligned = Math.abs(b.lastLeft - line.left) <= BLOCK_LEFT_TOLERANCE && gap <= smaller * BLOCK_LINE_GAP;
+      const centered = Math.abs(center(b.last) - center(line)) <= BLOCK_LEFT_TOLERANCE && gap <= smaller * CELL_LINE_GAP;
+      return (leftAligned || centered) && line.top >= b.top;
+    });
     if (!block) {
-      blocks.push({ ...line, parts: [line.text], lastHeight: line.height, lastLeft: line.left });
+      blocks.push({ ...line, parts: [line.text], lastHeight: line.height, lastLeft: line.left, last: line });
       continue;
     }
     block.parts.push(line.text);
@@ -86,12 +96,16 @@ function mergeLines(items) {
     block.bottom = Math.max(block.bottom, line.bottom);
     block.lastHeight = line.height;
     block.lastLeft = line.left;
+    block.last = line;
   }
-  return blocks.map((b) => ({
-    text: b.parts.join(" / "),
-    x: (b.left + b.right) / 2,
-    y: (b.top + b.bottom) / 2,
-  }));
+  return blocks.map((b) => {
+    const cell = b.parts.length > 1 && b.parts.slice(1).some((part) => CELL_DETAIL.test(part));
+    return {
+      text: b.parts.join(" / "),
+      x: (b.left + b.right) / 2,
+      y: cell ? Math.max(b.top - CELL_PICTURE_OFFSET, 0) : (b.top + b.bottom) / 2,
+    };
+  });
 }
 
 /**

@@ -1,12 +1,14 @@
 // Screenshot helper for sim-eyes. Screenshots are 1x, so pixels are points.
 //   ocr <image.png>
-//     Reads text with Apple Vision. Prints a JSON array of { text, confidence, x, y, width, height }
+//     Reads text with Apple Vision (a dark screenshot is inverted first: Vision misreads light-on-dark
+//     text as upside-down garbage on macOS 27). Prints a JSON array of { text, confidence, x, y, width, height }
 //     in image pixels, origin top-left.
 //   ocr --diff <before.png> <after.png> [y0 y1]
 //     Prints { changed, bandChanged, x, y, width, height }: the count and bounding box of pixels
 //     that differ, and how many of them lie in rows y0..<y1 (0 without a band). The status bar
 //     (clock, battery) is ignored. `changed` is -1 when the sizes differ.
 import AppKit
+import CoreImage
 import Foundation
 import Vision
 
@@ -57,11 +59,34 @@ if CommandLine.arguments.count > 3, CommandLine.arguments[1] == "--diff" {
 }
 
 guard CommandLine.arguments.count > 1,
-      let cg = loadImage(CommandLine.arguments[1])
+      let loaded = loadImage(CommandLine.arguments[1])
 else {
     FileHandle.standardError.write(Data("cannot read image\n".utf8))
     exit(1)
 }
+
+/// Mean brightness (0...1) of the image, from a 16x16 average.
+func meanBrightness(_ image: CGImage) -> Double {
+    var pixels = [UInt8](repeating: 0, count: 16 * 16 * 4)
+    let context = CGContext(
+        data: &pixels, width: 16, height: 16, bitsPerComponent: 8, bytesPerRow: 64,
+        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    context.interpolationQuality = .medium
+    context.draw(image, in: CGRect(x: 0, y: 0, width: 16, height: 16))
+    var sum = 0
+    for i in stride(from: 0, to: pixels.count, by: 4) { sum += Int(pixels[i]) + Int(pixels[i + 1]) + Int(pixels[i + 2]) }
+    return Double(sum) / Double(16 * 16 * 3 * 255)
+}
+
+func inverted(_ image: CGImage) -> CGImage {
+    let input = CIImage(cgImage: image)
+    guard let filter = CIFilter(name: "CIColorInvert") else { return image }
+    filter.setValue(input, forKey: kCIInputImageKey)
+    guard let output = filter.outputImage else { return image }
+    return CIContext().createCGImage(output, from: input.extent) ?? image
+}
+
+let cg = meanBrightness(loaded) < 0.4 ? inverted(loaded) : loaded
 
 let width = Double(cg.width)
 let height = Double(cg.height)

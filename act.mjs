@@ -3,6 +3,12 @@ import { formatTree } from "./targets.mjs";
 
 /** Below this, the chosen next action is not trusted and act stops. */
 export const ACT_CONFIDENCE_MIN = 0.7;
+/** After a tap that changed nothing (a disabled row), a tap on a different control needs only this much: the goal keeps trying. */
+export const ACT_RETRY_MIN = 0.2;
+/** A tap on a row read from the screenshot needs only this much when it clearly leads (see ACT_LEAD_RATIO): rows that look alike spread the confidence. */
+export const ACT_LEAD_MIN = 0.5;
+/** "Clearly leads": the runner-up has at most this share of the chosen action's confidence. */
+export const ACT_LEAD_RATIO = 1 / 3;
 /** At or above this, the instruction counts as fulfilled. */
 export const ACT_DONE_MIN = 0.7;
 export const ACT_DEFAULT_STEPS = 5;
@@ -69,13 +75,33 @@ export function actOptions(targets, { text } = {}) {
   return { criteria, actions };
 }
 
+/**
+ * Whether the chosen next action is trusted enough to run. A tap that left the screen unchanged is
+ * not the end of a goal that has other candidates (the greyed-out rows of a file picker ignore taps).
+ * Rows read from the screenshot (a picker outside the app's tree) show no disabled state and look alike,
+ * which spreads the confidence: a tap on one that clearly leads needs only ACT_LEAD_MIN, and after an idle
+ * tap on such a row a tap on another needs ACT_RETRY_MIN (the same control again is never trusted).
+ * Accessibility controls keep the full bar: a disabled Continue that ignored a tap is a real stop.
+ */
+export function trustedAction(step, history = []) {
+  if (!step.action) return false;
+  const last = history[history.length - 1];
+  const ocrTap = step.action.kind === "tap" && step.action.target.ocr;
+  if (!ocrTap) return step.confidence >= ACT_CONFIDENCE_MIN;
+  if (last?.action === "tap" && last.readFromScreenshot && last.effect?.screenChanged === false) {
+    return step.action.target.label !== last.control && step.confidence >= ACT_RETRY_MIN;
+  }
+  const leads = !step.runnerUp || step.runnerUp.probability <= step.confidence * ACT_LEAD_RATIO;
+  return step.confidence >= (leads ? ACT_LEAD_MIN : ACT_CONFIDENCE_MIN);
+}
+
 /** What a step did, as TypeSafe sees it in `stepsTaken`. `page` is the pager position it was taken on. */
 export function stepRecord(action, screenTitle, page) {
   const on = { ...(screenTitle ? { onScreen: screenTitle } : {}), ...(page ? { onPage: page } : {}) };
   if (action.kind === "tap" && action.target.back) {
     return { action: "go back", to: action.target.label, ...on };
   }
-  if (action.kind === "tap") return { action: "tap", control: action.target.label, ...on };
+  if (action.kind === "tap") return { action: "tap", control: action.target.label, ...(action.target.ocr ? { readFromScreenshot: true } : {}), ...on };
   if (action.kind === "type") {
     return { action: "fill field", control: action.target.label, text: action.text, submitted: false, ...on };
   }
@@ -134,11 +160,12 @@ export const NEXT_QUESTION = {
     "If a visible control's label names the destination, or the screen on the way to it, tap that control.",
     "If the control the instruction needs is itself tagged [covered by popup \"name\"] in `hierarchy`, first tap that popup's Dismiss or Close control. A control tagged [not listed] is disabled or unavailable, and dismissing a popup does not help it.",
     "A goal with several parts (\"enter Select mode and select the file\") is done in order: pick the action for the first part that is not done yet. A mode or action the list does not show (Select, Sort, View as, Filter) usually lives in an options or overflow control (a label such as \"View and filter options\", \"More\", \"Options\", \"Menu\", \"Actions\", \"Filter\"): tap that control first (this is for an action or mode, not for a screen to open: a screen that is not listed is further down, so swipe up). A control whose label names the destination still wins over a menu.",
+    "To select a file in a file picker (the Files app browser: a grid or list of items with a date and a size under each name), tap the name of a file row. A file shows a size (KB, MB) and a date under its name, so a control whose text includes a size such as \"104KB\" is a file; a folder shows \"N items\". A file type named in the instruction (pdf) does not have to appear in a name. When the names do not show which file has the type, tap the first file row: a row the picker greys out because the app does not accept its type ignores the tap. A file row in `stepsTaken` whose tap left the screen unchanged is such a disabled row, not a dead end: tap the next file row after it (left to right, top to bottom), and keep going until a tap changes the screen. Tap a file before opening a folder, and never Search, Cancel, the close X or the Recents / Shared / Browse tabs. Only when no file is listed, open a folder or swipe up.",
     "When no control in `controls` names the destination or a screen on the way to it, swipe up: a screen opens scrolled to its top, so rows that are not listed yet are below. Do not tap an unrelated control to look for it. Swipe down only after an earlier swipe up in `stepsTaken` on this screen went past it.",
     "If `textToType` is set and the instruction needs text in a field, fill that field. Focusing a field without filling it does not help.",
     "When the last step in `stepsTaken` is \"fill field\" and the instruction asks to search or submit, press return.",
     "Go back only when the destination cannot be reached from the current screen.",
-    "Never repeat an action from `stepsTaken` that left the screen unchanged, including a tap whose `effect.screenChanged` is false.",
+    "Never repeat an action from `stepsTaken` that left the screen unchanged, including a tap whose `effect.screenChanged` is false. Tapping a different control is not repeating it.",
     "Pick none when nothing visible or reachable by scrolling helps.",
   ],
 };

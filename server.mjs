@@ -27,7 +27,6 @@ import { controlsLine, coveredControlsLine, coveredScreenLine, screenLine } from
 import { screenCover } from "./cover-check.mjs";
 import { needsOcr, ocrTargets, recognizeText, screenDiff } from "./ocr.mjs";
 import {
-  ACT_CONFIDENCE_MIN,
   ACT_DEFAULT_STEPS,
   ACT_DONE_MIN,
   ACT_MAX_STEPS,
@@ -37,6 +36,7 @@ import {
   effectText,
   screenSignature,
   stepRecord,
+  trustedAction,
   typesafeClient,
 } from "./act.mjs";
 import { formatTargets, keyboardShown, listTargets, screenContext } from "./targets.mjs";
@@ -49,6 +49,7 @@ import {
   releaseLease,
   renewLease,
 } from "./pool.mjs";
+import { parseAdCommand } from "./ad-command.mjs";
 import { preferDiffersFromBinding, preferHonored, SESSION_ID_RULE } from "./binding-prefer.mjs";
 import {
   SessionRegistry,
@@ -85,7 +86,7 @@ function prefixSession(result, sessionId, created) {
 }
 
 function adCommand() {
-  if (process.env.SIM_EYES_AD) return process.env.SIM_EYES_AD.split(" ");
+  if (process.env.SIM_EYES_AD) return parseAdCommand(process.env.SIM_EYES_AD);
   if (existsSync("/opt/homebrew/bin/agent-device"))
     return ["/opt/homebrew/bin/agent-device"];
   if (existsSync("/usr/local/bin/agent-device"))
@@ -742,7 +743,7 @@ async function actOn(instruction, args) {
     };
     if (needsOcr(targets)) await useOcr("no control has an accessibility label");
     let step = await decide();
-    const settled = () => step.doneProbability >= ACT_DONE_MIN || (step.action && step.confidence >= ACT_CONFIDENCE_MIN);
+    const settled = () => step.doneProbability >= ACT_DONE_MIN || trustedAction(step, history);
     // Labelled controls can still miss what the goal needs (list rows, ad views): retry once with OCR.
     if (!settled() && !targets.some((t) => t.ocr)) {
       await useOcr("the accessibility controls did not cover the goal");
@@ -771,7 +772,7 @@ async function actOn(instruction, args) {
     if (history.length >= maxSteps) {
       return unconfirmed(`done p=${doneP} after ${maxSteps} step(s)`);
     }
-    if (!step.action || step.confidence < ACT_CONFIDENCE_MIN) {
+    if (!trustedAction(step, history)) {
       const noBack = !acted && BACK_GOAL.test(instruction) && !cover.hidden && backTargets(targets).length === 0;
       const why = step.action
         ? `unsure of the next step (${step.key}, confidence ${step.confidence.toFixed(2)})`
