@@ -1,6 +1,6 @@
 # Install the MCP without the source (npm package) — Implementation Plan
 
-**Status:** Implemented and **published as `sim-eyes@1.6.0` on 2026-10-02** (shasum `c04943902c713dce514c0fb409c4e428c8944fb1`, equal to the dry run). Waiting on the owner: PR merge and the VPS app/bundle publish. All decisions below were made with the owner (see [Questions & Decisions](#questions--decisions)).
+**Status:** Implemented and **published as `sim-eyes@1.6.0` on 2026-10-02** (shasum `c04943902c713dce514c0fb409c4e428c8944fb1`, equal to the dry run). PR #3 merged (`09e3bad`). Mac app 1.6.0 and the signed 1.6.0 bundle are on the VPS (2026-10-02). All decisions below were made with the owner (see [Questions & Decisions](#questions--decisions)).
 
 > **HANDOFF NOTICE — read this before starting work.**
 >
@@ -41,9 +41,9 @@ Evidence: `.local/qa-evidence/npm-install/` (git-ignored). Gate: `npm test` gree
 - [x] Published `sim-eyes@1.6.0` by the owner (the account needed 2FA enabled first).
 - [x] Post-publish check: `npx -y sim-eyes@1.6.0 doctor` from an empty temp dir, all PASS, and `claude mcp add sim-eyes -- npx -y sim-eyes` connects → `post-publish-doctor.txt` (criterion 12).
 - [x] Confirm MIT + "Copyright (c) 2026 Quang Tran" in `LICENSE`.
-- [ ] Decide on the VPS publish (`publish-app`, `release-bundle --publish`) for app 1.6.0: old 1.5.x apps will say "needs a newer app" (proved in `updater-test.txt`, real hashes). Not run.
+- [x] Done 2026-10-02: `publish-app` and `release-bundle --publish` for app 1.6.0 (download served, sha256 `2c6e90a7092e…` matches; manifest answers 401 without a token). Old 1.5.x apps now say old 1.5.x apps will say "needs a newer app" (proved in `updater-test.txt`, real hashes). 
 - [ ] Intel (x86_64) slice of `bin/ocr` is built but unrun: no Rosetta here (`lipo-codesign.txt`).
-- [ ] Merge: open a PR from `feat/npm-install` (not opened).
+- [x] Merged as PR #3.
 
 ## Overview
 

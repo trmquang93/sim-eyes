@@ -7,7 +7,7 @@ installed skill is found.
 | | |
 | --- | --- |
 | Origin | https://github.com/trmquang93/ios-dev-kit, `skills/sim-pool/scripts/sim-pool` |
-| Origin commit | none: in the author's checkout `skills/sim-pool/` was not yet committed on 2026-10-02 |
+| Origin commit | `a001618` (ios-dev-kit, committed 2026-10-02; the file is byte-identical to the one copied here) |
 | Copied | 2026-10-02 |
 | sha256 | `429abcddb140afe075a16b00e90405ab355e79abbea1e772bef5b90d992d5312` |
 | License | MIT, same as sim-eyes (same author) |
