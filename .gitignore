@@ -6,3 +6,5 @@ dist/
 app/typesafe.key
 promo/out/
 promo/stills/
+release/
+downloads/

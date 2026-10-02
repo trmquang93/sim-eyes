@@ -1,0 +1,44 @@
+# sim-eyes hub on 149.28.137.49, next to the other apps in /opt/apps/. Traefik (already there) terminates HTTPS.
+# Labels follow /opt/apps/sumnote/docker-compose.yml, minus gzip-compress: the app zip is already compressed and the host has 1 vCPU. No Watchtower label: this image is built on the host, not pulled.
+services:
+  sim-eyes-hub:
+    build: .
+    image: sim-eyes-hub:local
+    container_name: sim-eyes-hub
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    environment:
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY}
+      RATE_PER_MINUTE: ${RATE_PER_MINUTE:-60}
+      RATE_PER_DAY: ${RATE_PER_DAY:-3000}
+    volumes:
+      - ./data:/data
+    networks:
+      - traefik-public
+    deploy:
+      resources:
+        limits:
+          memory: ${MEMORY_LIMIT:-128M}
+        reservations:
+          memory: ${MEMORY_RESERVATION:-32M}
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-public"
+      - "traefik.http.routers.sim-eyes-hub.rule=Host(`${HUB_DOMAIN}`)"
+      - "traefik.http.routers.sim-eyes-hub.entrypoints=websecure"
+      - "traefik.http.routers.sim-eyes-hub.service=sim-eyes-hub"
+      - "traefik.http.routers.sim-eyes-hub.tls=true"
+      - "traefik.http.routers.sim-eyes-hub.tls.certresolver=letsencrypt"
+      - "traefik.http.services.sim-eyes-hub.loadbalancer.server.port=8080"
+
+networks:
+  traefik-public:
+    external: true
