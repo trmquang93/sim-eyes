@@ -1,14 +1,18 @@
 # sim-eyes
 
-Cursor MCP for an iOS simulator. Each call returns the next screenshot.
+An MCP server that lets an agent look at and drive one iOS simulator, plus **Studio**, a Mac app where testers write test cases as plain sentences and run them on a simulator. Every step reports the screen it left behind in text.
+
+| Part | What it is |
+| --- | --- |
+| MCP server (`server.mjs`) | `acquire`, `batch`, `continue`, `release`, `status`: agents drive a leased simulator through batches of steps |
+| [Studio](#studio-plain-text-tests-for-testers) | Local web page and signed Mac app for testers (`studio/`, `app/`) |
+| [Hub](hub/README.md) | The VPS server behind the Mac app: invite tokens, signed updates, TypeSafe relay, public download page (`hub/`) |
 
 ## Multi-agent (required on a shared Mac)
 
-**Problem:** Every Cursor chat used to hardcode session `sim-eyes` + device `iPhone 17`, so agents stomped each other.
+Each MCP process gets a unique `agent-device` session (`sim-eyes-<pid>-<hex>`) and leases a simulator through the **sim-pool** skill (`~/.claude/skills/sim-pool`), so agents never share a device.
 
-**Fix (v1.1):** Each MCP process gets a unique `agent-device` session (`sim-eyes-<pid>-<hex>`) and leases a simulator through [sim-pool](https://github.com/trmquang93) (`~/.claude/skills/sim-pool`).
-
-**Session IDs (v1.3):** One `sim-eyes` MCP process can serve many chats. Each chat starts with `acquire` or `batch` **without** `session_id`; the response begins with `session_id=se-…`. Pass that on **every** later `batch`, `acquire`, `status`, and `release`. Each `session_id` gets its own sim-pool lease and agent-device session — no UDID in `mcp.json`. sim-pool picks a free whitelisted device per new session.
+**Session IDs:** One `sim-eyes` MCP process can serve many chats. Each chat starts with `acquire` or `batch` **without** `session_id`; the response begins with `session_id=se-…`. Pass that on **every** later `batch`, `acquire`, `status`, and `release`. Each `session_id` gets its own sim-pool lease and agent-device session — no UDID in `mcp.json`. sim-pool picks a free whitelisted device per new session.
 
 | Goal | What to do |
 | --- | --- |
@@ -107,13 +111,17 @@ Leases renew on every tool call; TTL + dead MCP pid recover orphans via sim-pool
 
 ## Studio (plain-text tests for testers)
 
-**Testers: use the Mac app.** `npm run build-app` makes `dist/SimEyesStudio.app` and `dist/SimEyesStudio.zip` (about 50 MB), which holds its own Node, agent-device, sim-pool and Studio. A tester needs only a Mac with Xcode installed and opened once:
+**Testers: use the Mac app.** Download it from the hub's home page (`https://sim-eyes.unitvn.com`, no token needed). It holds its own Node, agent-device, sim-pool and Studio (about 50 MB). A tester needs only a Mac with Xcode installed and opened once, and an **invite token** from the person who runs the hub:
 
 1. Unzip, drag `SimEyesStudio.app` to Applications.
 2. First open only: right-click the app, choose **Open**, then **Open** again (it is signed ad hoc, not notarized, so a plain double-click is refused). If macOS says it is damaged, run `xattr -dr com.apple.quarantine /Applications/SimEyesStudio.app` once.
-3. The small window starts Studio and opens the page in the browser. On the first run it lets sim-pool lease the Mac's iPhone simulators (`sim-pool init`). The TypeSafe key is bundled at build time (`TYPESAFE_API_KEY` or git-ignored `app/typesafe.key`; the build fails without one), so testers configure nothing. Anyone who has the app can extract that key, so use a key you can revoke. **TypeSafe Key…** optionally stores their own key in the Keychain instead (it restarts Studio, after asking if a test is running). Quitting the app stops Studio; so does a crash of the app.
+3. The small window starts Studio and opens the page in the browser. On the first run it lets sim-pool lease the Mac's iPhone simulators (`sim-pool init`). Choose **Invite Token…** and paste the token once (kept in the Keychain). Without it, lines that are not a fixed phrase run as goals and the app gets no updates. Quitting the app stops Studio; so does a crash of the app.
 
-If something breaks, `~/Library/Logs/SimEyesStudio.log` has Studio's output. Build for another chip with `ARCH=x86_64 npm run build-app` (default is this Mac's chip). The build downloads the official Node from nodejs.org and checks its SHA-256; `NODE_MAJOR`, `AGENT_DEVICE_VERSION` and `SIM_POOL_SRC` override the pinned inputs.
+**No key in the app.** The app holds no TypeSafe key: its TypeSafe calls go through the hub with the invite token, and the hub swaps in the real key. **Updates:** the app checks the hub at launch (and every 6 hours, or **Check for Updates**), verifies the ed25519 signature of the newest Studio bundle, stages it, and starts it on the next launch. A release that changes dependencies needs a new app build.
+
+If something breaks, `~/Library/Logs/SimEyesStudio.log` has Studio's output.
+
+**Building the app (developers).** `npm run build-app` makes `dist/SimEyesStudio.app` and `dist/SimEyesStudio.zip`. It needs the Xcode command line tools, `app/release-public.pem` (`node scripts/release-bundle.mjs --keygen`, once) and the sim-pool script. Build for another chip with `ARCH=x86_64 npm run build-app` (default is this Mac's chip). The build downloads the official Node from nodejs.org and checks its SHA-256; `NODE_MAJOR`, `AGENT_DEVICE_VERSION`, `SIM_POOL_SRC` and `HUB_URL` override the pinned inputs.
 
 Developers can still run it from source:
 
@@ -137,4 +145,25 @@ Needs a free sim-pool simulator to run, and `TYPESAFE_API_KEY` to read lines tha
 
 Do not use real credentials in tests: typed text and screenshots are stored in plain files.
 
-Checks: `npm test` (no simulator), `node studio/eval-map.mjs` (TypeSafe), `node studio/test-studio-live.mjs` (needs a free simulator).
+## Hub and releases
+
+The hub (`hub/`, deployed with Docker behind Traefik) stores no tester data. It serves the public home page and app download, hands out signed Studio bundles and relays TypeSafe calls behind an invite token. Deploy, tokens and rotating the key are in [hub/README.md](hub/README.md). The release flow, run on the developer's Mac (the private key `~/.sim-eyes-release/private.pem` never goes to the VPS or the repo):
+
+```
+# bump "version" in package.json, then:
+npm run release-bundle -- --publish root@149.28.137.49:/opt/apps/sim-eyes-hub/data/releases   # signed Studio bundle: testers update at their next launch
+npm run build-app && npm run publish-app -- --publish root@149.28.137.49:/opt/apps/sim-eyes-hub/data/downloads   # new app build for the home page
+```
+
+## Development
+
+```
+npm test                              # every test that needs no simulator (MCP server, Studio, hub, updater, release scripts)
+node studio/eval-map.mjs              # TypeSafe: gates the Studio line mapper
+node eval-act.mjs                     # TypeSafe: goal judgments
+node test-act-live.mjs                # needs a free simulator and TYPESAFE_API_KEY
+node test-recovery-live.mjs           # needs a free simulator: tap fallback, pause, continue
+node studio/test-studio-live.mjs      # needs a free simulator
+```
+
+A busy pool makes a live check inconclusive; never take another agent's lease.
