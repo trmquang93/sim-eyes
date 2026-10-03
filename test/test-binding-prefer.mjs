@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { preferDiffersFromBinding, preferHonored } from "./binding-prefer.mjs";
+import { preferDiffersFromBinding, preferHonored } from "../binding-prefer.mjs";
 
 const b = { udid: "aaaa", name: "iPhone 17" };
 assert.equal(preferDiffersFromBinding(b, {}), false);

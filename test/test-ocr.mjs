@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { needsOcr, ocrTargets, recognizeText } from "./ocr.mjs";
-import { listTargets } from "./targets.mjs";
+import { needsOcr, ocrTargets, recognizeText } from "../ocr.mjs";
+import { listTargets } from "../targets.mjs";
 
 const rect = { x: 0, y: 0, width: 80, height: 40 };
 
@@ -70,7 +70,7 @@ assert.equal(
 // into three, the choice among the file's own fragments hid the one file in the picker (confidence 0.35).
 // Real OCR of the picker (fixtures/ocr/files-picker-grid.json); a folder and a file stay separate items.
 {
-  const items = JSON.parse(readFileSync(new URL("./fixtures/ocr/files-picker-grid.json", import.meta.url), "utf8"));
+  const items = JSON.parse(readFileSync(new URL("../fixtures/ocr/files-picker-grid.json", import.meta.url), "utf8"));
   const labels = ocrTargets(items).map((t) => t.label);
   assert.ok(labels.some((l) => /104KB/.test(l) && /saoke/.test(l)), `the file's name and size are not one target: ${JSON.stringify(labels)}`);
   assert.ok(labels.some((l) => /M4QA/.test(l) && !/saoke/.test(l)), `the folder merged into another item: ${JSON.stringify(labels)}`);
@@ -84,7 +84,7 @@ assert.equal(
 // Real Vision run: the accurate engine fails to load on some macOS builds (e5rt error), and a
 // screen with no accessibility labels is then unreadable. The helper must fall back, not throw.
 {
-  const lines = await recognizeText(fileURLToPath(new URL("./fixtures/ocr-label-less-card.png", import.meta.url)));
+  const lines = await recognizeText(fileURLToPath(new URL("../fixtures/ocr-label-less-card.png", import.meta.url)));
   const texts = lines.map((l) => l.text);
   assert.ok(texts.includes("Image to PDF"), `Vision read no title from the fixture: ${JSON.stringify(texts)}`);
   const card = ocrTargets(lines, []).find((t) => t.label.startsWith("Image to PDF"));

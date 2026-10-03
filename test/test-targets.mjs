@@ -10,7 +10,7 @@ import {
   formatTree,
   coveringDialog,
   staleDialogBranches,
-} from "./targets.mjs";
+} from "../targets.mjs";
 
 const nodes = [
   {
@@ -85,7 +85,7 @@ assert.deepEqual(consentTargets.map((t) => t.label), ["Settings"]);
 
 // Real trees (fixtures/trees) from an app whose consent form (UMP) stays in the tree after it closes.
 {
-  const tree = (name) => JSON.parse(readFileSync(new URL(`./fixtures/trees/${name}.json`, import.meta.url)));
+  const tree = (name) => JSON.parse(readFileSync(new URL(`../fixtures/trees/${name}.json`, import.meta.url)));
   const labels = (name) => listTargets(tree(name)).map((t) => t.label);
 
   // Dismissed form beside the app's language screen: the rows are the controls, not the form's button.
@@ -129,7 +129,7 @@ assert.deepEqual(consentTargets.map((t) => t.label), ["Settings"]);
 // A sheet keeps the screen it covers in the tree: the sheet's branches, a full-screen Toolbar, then the screen below.
 // Only the sheet is on top, so only its controls are listed and only its texts describe the screen.
 {
-  const tree = (name) => JSON.parse(readFileSync(new URL(`./fixtures/trees/${name}.json`, import.meta.url)));
+  const tree = (name) => JSON.parse(readFileSync(new URL(`../fixtures/trees/${name}.json`, import.meta.url)));
   const sheet = tree("my-files-sheet-over-home");
   assert.deepEqual(listTargets(sheet).map((t) => t.label), ["Cancel", "Welcome.pdf"]);
   assert.deepEqual(screenContext(sheet).texts, ["My Files"]);
@@ -179,7 +179,7 @@ assert.deepEqual(consentTargets.map((t) => t.label), ["Settings"]);
 // tab bar's Toolbar and holds a ScrollView and labelled buttons, but it is not a screen: the app's controls stay tappable and
 // the focused field is found, so `type` and `tap` keep working. (Regression: the app's tree vanished and only keys were listed.)
 {
-  const focused = listTargets(JSON.parse(readFileSync(new URL("./fixtures/trees/files-search-focused.json", import.meta.url))));
+  const focused = listTargets(JSON.parse(readFileSync(new URL("../fixtures/trees/files-search-focused.json", import.meta.url))));
   const labels = focused.map((t) => t.label);
   for (const label of ["TextField", "Cancel", "Create", "Tool", "Files", "More actions for QAFolder"]) assert.ok(labels.includes(label), label);
   const field = focused.find((t) => t.label === "TextField");
@@ -188,7 +188,7 @@ assert.deepEqual(consentTargets.map((t) => t.label), ["Settings"]);
   // The current tab is marked, so tapping it again is not a failed tap.
   assert.equal(focused.find((t) => t.label === "Files").selected, true);
   assert.equal(focused.find((t) => t.label === "Tool").selected, false);
-  assert.equal(keyboardShown(JSON.parse(readFileSync(new URL("./fixtures/trees/files-search-focused.json", import.meta.url)))), true);
+  assert.equal(keyboardShown(JSON.parse(readFileSync(new URL("../fixtures/trees/files-search-focused.json", import.meta.url)))), true);
   assert.equal(keyboardShown([{ type: "Button" }]), false);
 }
 console.log("test-targets: ok");

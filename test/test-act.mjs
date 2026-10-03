@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { actOptions, actState, decideStep, effectRecord, effectText, screenSignature, stepRecord, trustedAction } from "./act.mjs";
-import { screenContext } from "./targets.mjs";
+import { actOptions, actState, decideStep, effectRecord, effectText, screenSignature, stepRecord, trustedAction } from "../act.mjs";
+import { screenContext } from "../targets.mjs";
 
 const targets = [
   { n: 1, label: "Settings", x: 42, y: 84, editable: false },

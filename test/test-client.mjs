@@ -14,7 +14,7 @@ function toCall(name, args) {
     : { name, arguments: args };
 }
 
-const serverPath = join(dirname(fileURLToPath(import.meta.url)), "server.mjs");
+const serverPath = join(dirname(fileURLToPath(import.meta.url)), "..", "server.mjs");
 
 const init = {
   jsonrpc: "2.0",

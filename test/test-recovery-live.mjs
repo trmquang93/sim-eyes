@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const child = spawn("node", [join(dirname(fileURLToPath(import.meta.url)), "server.mjs")], { stdio: ["pipe", "pipe", "inherit"] });
+const child = spawn("node", [join(dirname(fileURLToPath(import.meta.url)), "..", "server.mjs")], { stdio: ["pipe", "pipe", "inherit"] });
 const waiting = new Map();
 let buf = "";
 child.stdout.on("data", (d) => {

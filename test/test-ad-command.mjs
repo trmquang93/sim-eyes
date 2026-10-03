@@ -2,7 +2,7 @@
 // run the wrong program, so a JSON array must pass through untouched while the old space form keeps working.
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { adCommandFromHost, findPackageJson, parseAdCommand, resolveAdCommand } from "./ad-command.mjs";
+import { adCommandFromHost, findPackageJson, parseAdCommand, resolveAdCommand } from "../ad-command.mjs";
 
 assert.deepEqual(parseAdCommand("npx -y agent-device"), ["npx", "-y", "agent-device"]);
 assert.deepEqual(parseAdCommand("/opt/homebrew/bin/agent-device"), ["/opt/homebrew/bin/agent-device"]);

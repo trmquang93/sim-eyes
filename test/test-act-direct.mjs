@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { BACK_GOAL, backTargets, dragEnds, gestureNode, pinchPlan, tapGoalNames, tapTarget } from "./act-direct.mjs";
-import { controlsLine, screenLine } from "./screen-summary.mjs";
-import { listTargets, screenContext } from "./targets.mjs";
+import { BACK_GOAL, backTargets, dragEnds, gestureNode, pinchPlan, tapGoalNames, tapTarget } from "../act-direct.mjs";
+import { controlsLine, screenLine } from "../screen-summary.mjs";
+import { listTargets, screenContext } from "../targets.mjs";
 
-const tree = (name) => JSON.parse(readFileSync(new URL(`./fixtures/trees/${name}.json`, import.meta.url)));
+const tree = (name) => JSON.parse(readFileSync(new URL(`../fixtures/trees/${name}.json`, import.meta.url)));
 
 // The `tap` step is answered by code only when the label matches exactly; several matches need nth, never a guess.
 {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { describeStep, helpRequest, notRunText, stepFailed, tapFallbackGoal, tapResult, tapWithFallback } from "./tap-recovery.mjs";
-import { tapGoalNames } from "./act-direct.mjs";
+import { describeStep, helpRequest, notRunText, stepFailed, tapFallbackGoal, tapResult, tapWithFallback } from "../tap-recovery.mjs";
+import { tapGoalNames } from "../act-direct.mjs";
 
 const done = { outcome: "done", landed: true, summary: "tap \"Save\": done, tapped \"Save\", the screen changed." };
 const notConfirmed = { outcome: "acted", landed: false, summary: "tap \"Save\": acted but not confirmed, tapped \"Save\", nothing changed.\nmore" };

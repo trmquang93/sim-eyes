@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { describeDownload } from "./scripts/publish-app.mjs";
+import { describeDownload } from "../scripts/publish-app.mjs";
 
 const run = promisify(execFile);
 const dir = await mkdtemp(join(tmpdir(), "publish-app-"));

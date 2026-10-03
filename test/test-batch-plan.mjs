@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { needsShot, shortBatchReminder } from "./batch-plan.mjs";
+import { needsShot, shortBatchReminder } from "../batch-plan.mjs";
 
 const steps = [
   { tool: "tap", label: "Files" },

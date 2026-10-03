@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // Manual: needs a free simulator and TYPESAFE_API_KEY. Runs act cases against Settings.
-// Usage: node test-act-live.mjs [case name]
+// Usage: node test/test-act-live.mjs [case name]
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const serverPath = join(dirname(fileURLToPath(import.meta.url)), "server.mjs");
+const serverPath = join(dirname(fileURLToPath(import.meta.url)), "..", "server.mjs");
 const child = spawn("node", [serverPath], { stdio: ["pipe", "pipe", "inherit"] });
 const pending = new Map();
 let buf = "";
