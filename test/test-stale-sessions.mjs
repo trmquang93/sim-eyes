@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { isPidAlive, staleSimEyesSessions } from "./stale-sessions.mjs";
+import { isPidAlive, staleSimEyesSessions } from "../stale-sessions.mjs";
 
 const sessions = [
   { name: "sim-eyes-111-aa-se-1" }, // dead owner: stale

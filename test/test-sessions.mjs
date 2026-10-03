@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { SessionRegistry } from "./client-sessions.mjs";
+import { SessionRegistry } from "../client-sessions.mjs";
 
 const reg = new SessionRegistry();
 const a = reg.resolve(undefined, { allowCreate: true, toolName: "batch" });

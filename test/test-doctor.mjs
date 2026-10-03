@@ -2,7 +2,7 @@
 // into a confusing failure inside an agent session; an optional one (ffmpeg, the key) reported as FAIL scares them off;
 // and a diagnostic must never trigger macOS's Command Line Tools installer dialog by running python3 on a bare Mac.
 import assert from "node:assert/strict";
-import { doctorExitCode, formatDoctor, runDoctor } from "./doctor.mjs";
+import { doctorExitCode, formatDoctor, runDoctor } from "../doctor.mjs";
 
 const SIMCTL = JSON.stringify({
   devices: {

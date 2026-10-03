@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // The server exposes the simulator only through batch, and inside batch only through act (plus open and record).
-const serverPath = join(dirname(fileURLToPath(import.meta.url)), "server.mjs");
+const serverPath = join(dirname(fileURLToPath(import.meta.url)), "..", "server.mjs");
 const child = spawn("node", [serverPath], {
   stdio: ["pipe", "pipe", "inherit"],
   env: { ...process.env, SIM_EYES_USE_POOL: "0" },

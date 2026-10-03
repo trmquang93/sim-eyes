@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { screenCover } from "./cover-check.mjs";
-import { coveredControlsLine, coveredScreenLine } from "./screen-summary.mjs";
-import { listTargets } from "./targets.mjs";
+import { screenCover } from "../cover-check.mjs";
+import { coveredControlsLine, coveredScreenLine } from "../screen-summary.mjs";
+import { listTargets } from "../targets.mjs";
 
-const read = (path) => JSON.parse(readFileSync(new URL(`./fixtures/${path}.json`, import.meta.url)));
+const read = (path) => JSON.parse(readFileSync(new URL(`../fixtures/${path}.json`, import.meta.url)));
 const cover = (tree, ocr) => screenCover(listTargets(read(`trees/${tree}`)), read(`ocr/${ocr}`));
 
 // The Photos picker draws over the app from another process: the tree still lists the Tool tab's 20 controls,

@@ -210,12 +210,12 @@ Run the server from a checkout (`npm install` first); the config block is the sa
 npm test                              # every test that needs no simulator (MCP server, Studio, hub, updater, release scripts)
 node studio/eval-map.mjs              # TypeSafe: gates the Studio line mapper
 node studio/eval-judge.mjs            # OpenRouter (OPENROUTER_API_KEY): the judge on labelled screenshots
-node eval-act.mjs                     # TypeSafe: goal judgments
-node test-act-live.mjs                # needs a free simulator and TYPESAFE_API_KEY
-node test-recovery-live.mjs           # needs a free simulator: tap fallback, pause, continue
+node test/eval-act.mjs                # TypeSafe: goal judgments
+node test/test-act-live.mjs           # needs a free simulator and TYPESAFE_API_KEY
+node test/test-recovery-live.mjs      # needs a free simulator: tap fallback, pause, continue
 node studio/test-studio-live.mjs      # needs a free simulator
 ```
 
 A busy pool makes a live check inconclusive; never take another agent's lease.
 
-**Publishing to npm** (the maintainer, from this Mac): `npm publish --dry-run` first. `prepublishOnly` runs `npm test`, builds `bin/ocr` (`scripts/build-ocr.mjs`) and checks the tarball (`test-pack.mjs --require-binary`). `node scripts/verify-install.mjs` installs the tarball into a temp dir outside the repo and talks MCP to it (`--live`, `--goal`, `--goal --hub`, `--cold-start` for the rest). The version is kept equal to the Mac app's, and `dependencies["agent-device"]` must equal `simEyes.agentDevice` (a changed dependency list needs a new app build).
+**Publishing to npm** (the maintainer, from this Mac): `npm publish --dry-run` first. `prepublishOnly` runs `npm test`, builds `bin/ocr` (`scripts/build-ocr.mjs`) and checks the tarball (`test/test-pack.mjs --require-binary`). `node scripts/verify-install.mjs` installs the tarball into a temp dir outside the repo and talks MCP to it (`--live`, `--goal`, `--goal --hub`, `--cold-start` for the rest). The version is kept equal to the Mac app's, and `dependencies["agent-device"]` must equal `simEyes.agentDevice` (a changed dependency list needs a new app build).

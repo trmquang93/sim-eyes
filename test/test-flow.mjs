@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const serverPath = join(dirname(fileURLToPath(import.meta.url)), "server.mjs");
+const serverPath = join(dirname(fileURLToPath(import.meta.url)), "..", "server.mjs");
 const child = spawn("node", [serverPath], {
   stdio: ["pipe", "pipe", "inherit"],
   env: { ...process.env, SIM_EYES_DEVICE: "iPhone 17" },

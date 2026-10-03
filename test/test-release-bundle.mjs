@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { posix } from "node:path";
-import { isSafeBundlePath } from "./app/bundle-format.mjs";
-import { verifyBundle, verifyManifest } from "./app/updater.mjs";
-import { buildBundle, collectFiles, packageInfo, signManifest } from "./scripts/release-bundle.mjs";
+import { isSafeBundlePath } from "../app/bundle-format.mjs";
+import { verifyBundle, verifyManifest } from "../app/updater.mjs";
+import { buildBundle, collectFiles, packageInfo, signManifest } from "../scripts/release-bundle.mjs";
 
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const pub = publicKey.export({ type: "spki", format: "pem" });

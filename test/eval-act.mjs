@@ -2,16 +2,16 @@
 // Replays recorded act decision states against TypeSafe (needs TYPESAFE_API_KEY, no simulator).
 // Each fixture expects "done", "stop", or an option key such as "tap 3" ("tap 6|tap 7" accepts either). Run after changing act prompts.
 import { readFile } from "node:fs/promises";
-import { ACT_CONFIDENCE_MIN, ACT_DONE_MIN, decideStep, trustedAction, typesafeClient } from "./act.mjs";
-import { listTargets, screenContext } from "./targets.mjs";
+import { ACT_CONFIDENCE_MIN, ACT_DONE_MIN, decideStep, trustedAction, typesafeClient } from "../act.mjs";
+import { listTargets, screenContext } from "../targets.mjs";
 
-const file = process.argv[2] ?? new URL("./fixtures/act-states.jsonl", import.meta.url);
+const file = process.argv[2] ?? new URL("../fixtures/act-states.jsonl", import.meta.url);
 const fixtures = await Promise.all(
   (await readFile(file, "utf8")).trim().split("\n").map(async (l) => {
     const f = JSON.parse(l);
     // A fixture may name a captured tree (fixtures/trees) instead of listing targets.
     if (f.tree) {
-      f.nodes = JSON.parse(await readFile(new URL(`./fixtures/trees/${f.tree}.json`, import.meta.url), "utf8"));
+      f.nodes = JSON.parse(await readFile(new URL(`../fixtures/trees/${f.tree}.json`, import.meta.url), "utf8"));
       f.targets = listTargets(f.nodes);
       f.context = screenContext(f.nodes);
       f.history ??= [];

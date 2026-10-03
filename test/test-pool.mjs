@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { parseAcquireOutput, defaultInstanceId, resolveSimPool, findSimPoolBin, ensurePoolConfigured } from "./pool.mjs";
+import { parseAcquireOutput, defaultInstanceId, resolveSimPool, findSimPoolBin, ensurePoolConfigured } from "../pool.mjs";
 
 const parsed = parseAcquireOutput(`
 LEASE_ID=abc-123

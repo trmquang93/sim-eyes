@@ -2,7 +2,7 @@
 // ocr.swift beside it and has not been altered; otherwise running it would execute stale or corrupted native code, so
 // the old compile-on-first-use path must take over.
 import assert from "node:assert/strict";
-import { ensureOcrBinary } from "./ocr.mjs";
+import { ensureOcrBinary } from "../ocr.mjs";
 
 const PACKAGED = "/pkg/bin/ocr";
 const META = "/pkg/bin/ocr.json";
