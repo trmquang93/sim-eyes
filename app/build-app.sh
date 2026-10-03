@@ -69,9 +69,24 @@ writeFileSync('$RES/app.json', JSON.stringify({ hubUrl: '$HUB_URL', appVersion: 
 sed "s/__VERSION__/$VERSION/" app/Info.plist > "$APP/Contents/Info.plist"
 swiftc -O -target "$ARCH-apple-macos13.0" app/main.swift -o "$APP/Contents/MacOS/SimEyesStudio"
 
-# 5. Ad-hoc signature (no Developer ID): testers open it once with right-click > Open, see app/README.md.
-codesign --force --deep --sign - "$APP"
+# 5. Signature. With SIGN_IDENTITY ("Developer ID Application: Name (TEAMID)") every Mach-O is signed with the hardened runtime
+# (node needs app/node.entitlements for V8); with NOTARY_PROFILE (xcrun notarytool store-credentials) the app is also notarized and stapled.
+# Without SIGN_IDENTITY it is ad-hoc signed and testers open it once with right-click > Open, see app/README.md.
+if [ -n "${SIGN_IDENTITY:-}" ]; then
+  codesign --force --options runtime --timestamp --entitlements "$REPO/app/node.entitlements" --sign "$SIGN_IDENTITY" "$RES/node"
+  codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP"
+else
+  codesign --force --deep --sign - "$APP"
+fi
 codesign --verify --deep --strict "$APP"
+
+if [ -n "${SIGN_IDENTITY:-}" ] && [ -n "${NOTARY_PROFILE:-}" ]; then
+  ( cd "$DIST" && rm -f notarize.zip && ditto -c -k --keepParent SimEyesStudio.app notarize.zip )
+  xcrun notarytool submit "$DIST/notarize.zip" --keychain-profile "$NOTARY_PROFILE" --wait
+  rm -f "$DIST/notarize.zip"
+  xcrun stapler staple "$APP"
+  xcrun stapler validate "$APP"
+fi
 
 ( cd "$DIST" && rm -f SimEyesStudio.zip && ditto -c -k --keepParent SimEyesStudio.app SimEyesStudio.zip )
 echo "Built $APP ($ARCH, Node ${TARBALL#node-}) and $DIST/SimEyesStudio.zip"
