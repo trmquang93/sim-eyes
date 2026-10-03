@@ -96,7 +96,36 @@ export async function readTest(root, project, test) {
   return { slug: test, ...(await readJson(testPath(root, project, test))) };
 }
 
+export const PRIORITIES = ["P0", "P1", "P2", "P3"];
+export const SKIP_REASONS = ["camera", "low-end", "network", "proxy", "dev-error", "date", "computer", "share-sheet", "gesture", "other"];
+const clip = (value, max) => String(value ?? "").trim().slice(0, max);
+
+/**
+ * The case fields of a test as stored: only known keys, trimmed, in a fixed shape. Throws for a priority or a skip reason
+ * that is not on the lists, so a typo never becomes a filter value nobody can select.
+ */
+export function caseFields(input = {}) {
+  const priority = clip(input.priority, 8).toUpperCase();
+  if (priority && !PRIORITIES.includes(priority)) throw new Error(`The priority must be one of ${PRIORITIES.join(", ")} or empty.`);
+  let skip = null;
+  if (input.skip) {
+    const reason = clip(input.skip.reason, 20);
+    if (!SKIP_REASONS.includes(reason)) throw new Error(`A skip reason must be one of: ${SKIP_REASONS.join(", ")}.`);
+    skip = { reason, note: clip(input.skip.note, 500) };
+  }
+  const fixtures = Array.isArray(input.fixtures) ? [...new Set(input.fixtures.map((f) => clip(f, 60)).filter(Boolean))] : [];
+  return { id: clip(input.id, 40), group: clip(input.group, 120), priority, notes: clip(input.notes, 2000), fixtures, skip };
+}
+
+const sameId = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/** Writes a test. A case ID is unique inside the project (compared without case), because a result is reported against it. */
 export async function writeTest(root, project, test, data) {
+  const id = String(data.id ?? "").trim();
+  if (id) {
+    const other = (await listTests(root, project)).find((t) => t.slug !== test && sameId(String(t.id ?? ""), id));
+    if (other) throw new Error(`The ID ${id} is already used by "${other.name}".`);
+  }
   await writeJson(testPath(root, project, test), data);
 }
 
@@ -164,3 +193,42 @@ export async function setVerdict(root, project, test, stamp, { result, note = ""
 }
 
 export const buildsDir = (root, project) => join(projectDir(root, project), "builds");
+export const fixturesDir = (root, project) => join(projectDir(root, project), "fixtures");
+
+const suitesDir = (root, project) => join(projectDir(root, project), "suites");
+const suiteDirOf = (root, project, stamp) => {
+  if (!/^\d{8}-\d{6}(?:-\d+)?$/.test(stamp)) throw new Error(`Not a suite: ${JSON.stringify(stamp)}`);
+  return join(suitesDir(root, project), stamp);
+};
+
+/** A new, empty suite folder (same stamp rules as a run). */
+export async function newSuiteDir(root, project, now = new Date()) {
+  const base = stampOf(now);
+  for (let i = 1; ; i += 1) {
+    const stamp = i === 1 ? base : `${base}-${i}`;
+    const dir = suiteDirOf(root, project, stamp);
+    try {
+      await mkdir(dirname(dir), { recursive: true });
+      await mkdir(dir);
+      return { stamp, dir };
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+    }
+  }
+}
+
+export const writeSuite = async (root, project, stamp, suite) => writeJson(join(suiteDirOf(root, project, stamp), "suite.json"), suite);
+export const readSuite = async (root, project, stamp) => ({ stamp, ...(await readJson(join(suiteDirOf(root, project, stamp), "suite.json"))) });
+
+export async function listSuites(root, project) {
+  const out = [];
+  for (const d of await dirs(suitesDir(root, project))) {
+    const suite = await readJsonOr(join(suitesDir(root, project), d.name, "suite.json"), null);
+    if (suite) out.push({ stamp: d.name, ...suite });
+  }
+  return out.sort((a, b) => b.stamp.localeCompare(a.stamp));
+}
+
+/** fixtures/fixtures.json: the named sets a test can list. Missing file = no sets. */
+export const readFixtureSets = async (root, project) => readJsonOr(join(fixturesDir(root, project), "fixtures.json"), {});
+export const writeFixtureSets = async (root, project, sets) => writeJson(join(fixturesDir(root, project), "fixtures.json"), sets);

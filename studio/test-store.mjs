@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createProject, deleteRun, listProjects, listRuns, listTests, newRunDir, readRun, readTest, resolveInProject, setVerdict, slug, updateProject, writeRun, writeTest } from "./store.mjs";
+import { caseFields, createProject, deleteRun, listProjects, listRuns, listSuites, listTests, newRunDir, newSuiteDir, readFixtureSets, readRun, readSuite, readTest, resolveInProject, setVerdict, slug, updateProject, writeFixtureSets, writeRun, writeSuite, writeTest } from "./store.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "studio-store-"));
 try {
@@ -21,6 +21,47 @@ try {
   await writeTest(root, "pdf-tools", "create-a-folder", test);
   assert.deepEqual(await readTest(root, "pdf-tools", "create-a-folder"), { slug: "create-a-folder", ...test });
   assert.equal((await listTests(root, "pdf-tools"))[0].lineCount, 1);
+
+  // A case from the QA sheet keeps its ID, group, priority, notes, fixtures and skip tag, and the list shows them.
+  {
+    const fields = caseFields({ id: " TC-IMG-032 ", group: "Image to PDF / Xóa trang", priority: "p0", notes: "3 pages", fixtures: ["photos-3", "photos-3", ""], skip: { reason: "camera", note: "needs the camera" } });
+    assert.deepEqual(fields, { id: "TC-IMG-032", group: "Image to PDF / Xóa trang", priority: "P0", notes: "3 pages", fixtures: ["photos-3"], skip: { reason: "camera", note: "needs the camera" } });
+    await writeTest(root, "pdf-tools", "delete-a-page", { name: "Delete a page", start: "fresh", lines: [], ...fields });
+    const listed = (await listTests(root, "pdf-tools")).find((x) => x.slug === "delete-a-page");
+    assert.equal(listed.id, "TC-IMG-032");
+    assert.equal(listed.priority, "P0");
+    assert.deepEqual(listed.skip, fields.skip);
+    assert.deepEqual(caseFields({}), { id: "", group: "", priority: "", notes: "", fixtures: [], skip: null }, "a test with no case fields is valid");
+    assert.throws(() => caseFields({ priority: "P9" }), /priority must be one of/);
+    assert.throws(() => caseFields({ skip: { reason: "cmaera" } }), /skip reason must be one of/);
+    // A report is made against the ID, so two tests may not share one, even in another letter case; saving a test again keeps its own ID.
+    await assert.rejects(writeTest(root, "pdf-tools", "other", { name: "Other", start: "fresh", lines: [], id: "tc-img-032" }), /already used by "Delete a page"/);
+    await writeTest(root, "pdf-tools", "delete-a-page", { name: "Delete a page", start: "fresh", lines: [], ...fields, notes: "edited" });
+  }
+
+  // The reviewer's verdict overrides the suggestion, and the run keeps both.
+  {
+    const d = await newRunDir(root, "pdf-tools", "delete-a-page", new Date(2026, 9, 3, 9, 0, 0));
+    await writeRun(root, "pdf-tools", "delete-a-page", d.stamp, { test, status: "completed", steps: [], suggestedVerdict: "pass", checkpoints: [{ n: 2, suggested: "pass", p: 0.95 }] });
+    const after = await setVerdict(root, "pdf-tools", "delete-a-page", d.stamp, { result: "fail", note: "page 2 still there" });
+    assert.equal(after.verdict.result, "fail");
+    assert.equal(after.suggestedVerdict, "pass", "the suggestion stays beside the verdict");
+    assert.equal(after.checkpoints[0].p, 0.95);
+  }
+
+  // Fixture sets and suites live in the project folder.
+  {
+    assert.deepEqual(await readFixtureSets(root, "pdf-tools"), {}, "no fixtures file = no sets");
+    await writeFixtureSets(root, "pdf-tools", { "photos-3": { photos: ["photos/a.jpg"] } });
+    assert.deepEqual((await readFixtureSets(root, "pdf-tools"))["photos-3"], { photos: ["photos/a.jpg"] });
+    const s = await newSuiteDir(root, "pdf-tools", new Date(2026, 9, 3, 10, 0, 0));
+    const s2 = await newSuiteDir(root, "pdf-tools", new Date(2026, 9, 3, 10, 0, 0));
+    assert.equal(s2.stamp, `${s.stamp}-2`);
+    await writeSuite(root, "pdf-tools", s.stamp, { status: "completed", items: [] });
+    assert.equal((await readSuite(root, "pdf-tools", s.stamp)).status, "completed");
+    assert.deepEqual((await listSuites(root, "pdf-tools")).map((x) => x.stamp), [s.stamp]);
+    await assert.rejects(readSuite(root, "pdf-tools", "../x"), /Not a suite/);
+  }
 
   // Slugs are the only thing a URL carries into a path.
   await assert.rejects(readTest(root, "pdf-tools", "../project"), /Not a valid test/);

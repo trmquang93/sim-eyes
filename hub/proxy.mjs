@@ -8,6 +8,22 @@ const PASS_BACK = ["content-type", "x-typesafe-request-id", "retry-after"];
 
 export const isAllowed = (method, path) => ALLOWED.has(`${method} ${path}`);
 
+/** The judge relay: one call (OpenRouter's decisions endpoint), always to one model. Same as studio/judge-client.mjs. */
+export const JUDGE_ALLOWED = new Set(["POST /decisions"]);
+export const JUDGE_MODEL = "perplexity/pplx-decider-v1-27b";
+export const isJudgeAllowed = (method, path) => JUDGE_ALLOWED.has(`${method} ${path}`);
+
+/** `body` with its model set to the judge model, so an invite token cannot spend the hub's credit on a dearer model. Null when it is not a JSON object. */
+export function pinJudgeModel(body) {
+  try {
+    const parsed = JSON.parse(body.toString("utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return Buffer.from(JSON.stringify({ ...parsed, model: JUDGE_MODEL }));
+  } catch {
+    return null;
+  }
+}
+
 /** `take(name)` -> { ok: true } or { ok: false, retryAfter } in seconds. Per name: `perMinute` in a sliding minute and `perDay` per UTC day. */
 export function createRateLimiter({ perMinute = 60, perDay = 3000, now = Date.now } = {}) {
   const recent = new Map();
@@ -30,7 +46,7 @@ export function createRateLimiter({ perMinute = 60, perDay = 3000, now = Date.no
 }
 
 /** Sends `body` to the upstream with the real key. Nothing from the client's headers is copied; the tester's token never leaves the hub. */
-export async function forward({ path, body, upstream, key, fetch, timeoutMs = 30_000 }) {
+export async function forward({ path, body, upstream, key, fetch, timeoutMs = 30_000, service = "TypeSafe" }) {
   let response;
   try {
     response = await fetch(`${upstream.replace(/\/+$/, "")}${path}`, {
@@ -40,7 +56,7 @@ export async function forward({ path, body, upstream, key, fetch, timeoutMs = 30
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
-    return { status: 502, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ error: `TypeSafe is unreachable: ${err.name === "TimeoutError" ? "timed out" : "connection failed"}` })) };
+    return { status: 502, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ error: `${service} is unreachable: ${err.name === "TimeoutError" ? "timed out" : "connection failed"}` })) };
   }
   const headers = {};
   for (const name of PASS_BACK) if (response.headers.get(name)) headers[name] = response.headers.get(name);

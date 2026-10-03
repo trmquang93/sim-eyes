@@ -69,3 +69,9 @@ Edit `.env`, then `docker compose up -d`. Testers change nothing.
 ```bash
 HUB_DATA_DIR=./data TYPESAFE_API_KEY=... node hub/hub.mjs
 ```
+
+## Judge relay (screenshot judge)
+
+`POST /judge/decisions` relays to OpenRouter's decisions endpoint (`https://openrouter.ai/api/alpha/decisions`) the way `/typesafe/v1/systemone` relays to TypeSafe: invite token in, the hub's OpenRouter key out, nothing else forwarded. It exists for Studio's judge, which sends a screenshot, so its body limit is 8 MB (TypeSafe stays 1 MB), the timeout is 60 s and the rate limit is its own (20 per minute, 500 per day per tester). The hub sets the request's `model` to `perplexity/pplx-decider-v1-27b` whatever the tester sent, so a token cannot spend the credit on a dearer model.
+
+Set `JUDGE_KEY` (an OpenRouter API key) in `.env`; `JUDGE_UPSTREAM` is optional (default `https://openrouter.ai/api/alpha`). Without `JUDGE_KEY` the route answers 503. A tester opts in with `SIM_EYES_JUDGE=hub` next to the usual `TYPESAFE_BASE_URL` and invite token. Bodies are never logged (they hold screenshots of the tester's app).

@@ -149,3 +149,18 @@ export function dragEnds(nodes, from, to) {
   }
   return { source, destination };
 }
+
+export const PINCH_MIN = 0.2;
+export const PINCH_MAX = 5;
+
+/** The `pinch` step's arguments: `{ scale, centre, what }`. Scale 1 moves nothing, so it is an error, not a success. */
+export function pinchPlan(args) {
+  const scale = Number(args.scale);
+  if (args.scale == null || !Number.isFinite(scale) || scale < PINCH_MIN || scale > PINCH_MAX || scale === 1) {
+    throw new Error(`pinch needs scale between ${PINCH_MIN} and ${PINCH_MAX}, not 1: above 1 zooms in (e.g. 2), below 1 zooms out (e.g. 0.5). Optional x, y is the centre.`);
+  }
+  const hasCentre = args.x != null || args.y != null;
+  const centre = hasCentre ? [Math.round(Number(args.x)), Math.round(Number(args.y))] : [];
+  if (hasCentre && (args.x == null || args.y == null || centre.some((v) => !Number.isFinite(v)))) throw new Error("pinch: pass both x and y as numbers (points), or neither.");
+  return { scale, centre, what: `pinched ${scale > 1 ? "open (zoom in)" : "closed (zoom out)"} by ${scale}${centre.length ? ` around (${centre[0]}, ${centre[1]})` : ""}` };
+}

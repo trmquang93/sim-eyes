@@ -64,6 +64,17 @@ try {
   assert.match(saved.data.lines[1].warning, /TYPESAFE_API_KEY/);
   assert.equal((await call("PUT", "/api/projects/settings-qa/tests/open-about", { name: "x", start: "sometimes", lines: [] })).status, 400);
 
+  // Case fields go through the same save; a save that sends none keeps them; a second test cannot take an ID.
+  const fielded = await call("PUT", "/api/projects/settings-qa/tests/open-about", { name: "Open About", start: "relaunch", lines: ['Tap "General"'], id: "TC-SET-001", group: "Settings / About", priority: "p1", notes: "iOS 17+", fixtures: ["docs"], skip: null });
+  assert.deepEqual([fielded.data.id, fielded.data.group, fielded.data.priority, fielded.data.fixtures], ["TC-SET-001", "Settings / About", "P1", ["docs"]]);
+  assert.equal((await call("PUT", "/api/projects/settings-qa/tests/open-about", { name: "Open About", start: "relaunch", lines: ['Tap "General"'] })).data.id, "TC-SET-001", "fields not sent are kept");
+  assert.equal((await call("POST", "/api/projects/settings-qa/tests", { name: "Second", id: "tc-set-001" })).status, 409, "a duplicate ID is a conflict");
+  assert.equal((await call("POST", "/api/projects/settings-qa/tests", { name: "Second", id: "TC-SET-002", priority: "P9" })).status, 400);
+  assert.equal((await call("POST", "/api/projects/settings-qa/tests", { name: "Third", id: "TC-SET-003", skip: { reason: "camera", note: "n" } })).data.skip.reason, "camera");
+  assert.equal((await call("GET", "/api/projects/settings-qa/tests")).data.find((x) => x.slug === "third").skip.reason, "camera");
+  await call("DELETE", "/api/projects/settings-qa/tests/third");
+  await call("PUT", "/api/projects/settings-qa/tests/open-about", { name: "Open About", start: "relaunch", lines: ['Tap "General"', "open the About page", "# note", "Check the iOS version is shown"], fixtures: [] });
+
   // One run at a time: a second Run is refused while one is open.
   let release;
   gate = new Promise((r) => (release = r));

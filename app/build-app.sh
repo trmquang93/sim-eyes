@@ -50,6 +50,7 @@ for f in studio/*.mjs; do
   case "$f" in studio/test-*|studio/eval-*) continue ;; esac
   cp "$f" "$RES/sim-eyes/$f"
 done
+cp studio/pdf-facts.swift "$RES/sim-eyes/studio/pdf-facts.swift"
 cp -R studio/public "$RES/sim-eyes/studio/public"
 ( cd "$RES/sim-eyes" && PATH="$(dirname "$RES/node"):$PATH" npm install --omit=dev --no-audit --no-fund --silent && npm install --no-save --omit=dev --no-audit --no-fund --silent "agent-device@$AGENT_DEVICE_VERSION" )
 
