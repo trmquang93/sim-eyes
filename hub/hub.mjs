@@ -10,11 +10,13 @@ import http from "node:http";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homePage, readLatest, resolveDownload } from "./downloads.mjs";
-import { forward, createRateLimiter, isAllowed } from "./proxy.mjs";
+import { forward, createRateLimiter, isAllowed, isJudgeAllowed, pinJudgeModel } from "./proxy.mjs";
 import { findToken } from "./tokens.mjs";
 
 const VERSION = /^\d+\.\d+\.\d+$/;
 const RELAY_PREFIX = "/typesafe";
+/** The Studio judge (pplx-decider on OpenRouter) takes a screenshot, so its body limit is larger and its calls are costlier than TypeSafe's. */
+const JUDGE_PREFIX = "/judge";
 
 class HttpError extends Error {
   constructor(status, message, headers = {}) {
@@ -53,12 +55,19 @@ export async function startHub({
   bodyLimit = 1024 * 1024,
   perMinute = 60,
   perDay = 3000,
+  judgeUpstream = "https://openrouter.ai/api/alpha",
+  judgeKey,
+  judgeBodyLimit = 8 * 1024 * 1024,
+  judgeTimeoutMs = 60_000,
+  judgePerMinute = 20,
+  judgePerDay = 500,
   now = Date.now,
   log = (line) => console.log(JSON.stringify(line)),
 } = {}) {
   if (!dataDir) throw new Error("dataDir is required.");
   const tokensFile = join(dataDir, "tokens.json");
   const limiter = createRateLimiter({ perMinute, perDay, now });
+  const judgeLimiter = createRateLimiter({ perMinute: judgePerMinute, perDay: judgePerDay, now });
   const readJson = async (path) => JSON.parse(await readFile(path, "utf8"));
 
   async function handle(req, res, entry) {
@@ -120,6 +129,21 @@ export async function startHub({
       entry.status = out.status;
       return send(res, out.status, out.body, out.headers);
     }
+
+    if (path.startsWith(`${JUDGE_PREFIX}/`)) {
+      const upstreamPath = path.slice(JUDGE_PREFIX.length);
+      if (!isJudgeAllowed(req.method, upstreamPath)) throw new HttpError(404, "Not found.");
+      if (!judgeKey) throw new HttpError(503, "The hub has no judge key configured.");
+      const taken = judgeLimiter.take(name);
+      if (!taken.ok) throw new HttpError(429, "Too many requests. Wait a moment.", { "retry-after": String(taken.retryAfter) });
+      const body = await readBody(req, judgeBodyLimit);
+      entry.bytes = body.length;
+      const pinned = pinJudgeModel(body);
+      if (!pinned) throw new HttpError(400, "The request must be a JSON object.");
+      const out = await forward({ path: upstreamPath, body: pinned, upstream: judgeUpstream, key: judgeKey, fetch, timeoutMs: judgeTimeoutMs, service: "The judge" });
+      entry.status = out.status;
+      return send(res, out.status, out.body, out.headers);
+    }
     throw new HttpError(404, "Not found.");
   }
 
@@ -147,6 +171,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     dataDir: env.HUB_DATA_DIR || "data",
     upstream: env.UPSTREAM || undefined,
     upstreamKey: env.TYPESAFE_API_KEY,
+    judgeUpstream: env.JUDGE_UPSTREAM || undefined,
+    judgeKey: env.JUDGE_KEY || undefined,
     port: Number(env.PORT) || 8080,
     perMinute: Number(env.RATE_PER_MINUTE) || undefined,
     perDay: Number(env.RATE_PER_DAY) || undefined,

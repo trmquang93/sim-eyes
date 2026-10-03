@@ -4,7 +4,8 @@
  * always released. Studio itself installs the selected build on the leased simulator (`install`), before sim-eyes touches it.
  */
 import { copyFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { suggestVerdict } from "./judge.mjs";
 import { leasedUdid, stepReport } from "./step-report.mjs";
 
 const START_STEPS = {
@@ -40,9 +41,14 @@ async function keepShot(report, file, name) {
  * @param {string} p.runDir existing folder for the run's files
  * @param {(name: string, args?: object) => Promise<{ content: Array<object>, isError?: boolean }>} p.call
  * @param {(p: { udid: string, appPath: string }) => Promise<void>} [p.install]
- * @param {(event: object) => void} [p.onEvent] `phase`, `step-start`, `step-end`, `run-end`
+ * @param {(p: { udid: string, names: string[], bundleId?: string }) => Promise<object>} [p.fixtures] puts the test's fixture sets into the leased simulator
+ * @param {(p: { file: object, udid: string, bundleId?: string, imageDir: string }) => Promise<{ suggested: string, p: number | null, detail: string, source: string, images?: string[] }>} [p.fileCheck] answers a "Check the file ..." line from the file on the simulator
+ * @param {(p: { expected: string, screen: string | null, imagePath?: string | null, imagePaths?: string[] }) => Promise<{ suggested: string, p: number | null, error?: string }>} [p.judge] suggests a result for a checkpoint
+ * @param {{ backend: string, model?: string } | null} [p.judgeInfo] recorded in the run
+ * @param {() => boolean} [p.shouldStop] checked before every step: true ends the run as "stopped" (the video is saved and the lease released)
+ * @param {(event: object) => void} [p.onEvent] `phase`, `step-start`, `step-end`, `checkpoint`, `run-end`
  */
-export async function runTest({ test, app, build = null, runDir, call, install, onEvent = () => {}, now = () => new Date() }) {
+export async function runTest({ test, app, build = null, runDir, call, install, fixtures, fileCheck, judge = null, judgeInfo = null, shouldStop = () => false, onEvent = () => {}, now = () => new Date() }) {
   const { step: startStep, label: startLabel } = startStepFor(test.start);
   const run = {
     test: { name: test.name, start: test.start, lines: test.lines },
@@ -53,7 +59,9 @@ export async function runTest({ test, app, build = null, runDir, call, install, 
     steps: [],
   };
   const warnings = [];
+  const toJudge = []; // checkpoints in order; judged after the lease is released, so the simulator is free while the model thinks
   let leased = false;
+  let leasedId = null;
   let recording = false;
   const fail = (failedAt, reason) => Object.assign(run, { status: "failed", failedAt, reason });
 
@@ -88,10 +96,10 @@ export async function runTest({ test, app, build = null, runDir, call, install, 
     if (!acquired.ok) throw new Error(firstLine(acquired.summary));
     leased = true;
 
+    let udid;
     if (build) {
       onEvent({ type: "phase", phase: "installing" });
       const started = Date.now();
-      let udid;
       try {
         udid = leasedUdid(acquired.text);
         await install({ udid, appPath: build.appPath });
@@ -99,6 +107,28 @@ export async function runTest({ test, app, build = null, runDir, call, install, 
       } catch (err) {
         run.install = { ok: false, ...(udid ? { udid } : {}), ms: Date.now() - started, error: err.message };
         return void fail("install", err.message);
+      }
+    }
+    // A file check after the steps needs the simulator's id; a reply without it makes those checks "unsure", never a guess.
+    leasedId = udid ?? (() => {
+      try {
+        return leasedUdid(acquired.text);
+      } catch {
+        return null;
+      }
+    })();
+
+    // After the build and before the app starts: the photos, files and permissions the case assumes.
+    if (test.fixtures?.length && fixtures) {
+      onEvent({ type: "phase", phase: "fixtures" });
+      const started = Date.now();
+      try {
+        udid ??= leasedUdid(acquired.text);
+        const done = await fixtures({ udid, names: test.fixtures, bundleId: build?.bundleId ?? app });
+        run.fixtures = { ok: true, ...done, ms: Date.now() - started };
+      } catch (err) {
+        run.fixtures = { ok: false, names: test.fixtures, ms: Date.now() - started, error: err.message };
+        return void fail("fixtures", err.message);
       }
     }
 
@@ -113,10 +143,56 @@ export async function runTest({ test, app, build = null, runDir, call, install, 
     let n = 0;
     for (const [lineIndex, line] of test.lines.entries()) {
       if (!line.step) continue;
+      if (shouldStop()) return void Object.assign(run, { status: "stopped", reason: "Stopped by the tester." });
       n += 1;
-      await runStepAt(n, line.text, lineIndex, line.step);
+      const record = await runStepAt(n, line.text, lineIndex, line.step);
+      if (record.ok && line.expected != null) {
+        const item = { n, lineIndex, expected: line.expected, screen: record.screen, shot: record.shot };
+        if (line.file && fileCheck) {
+          // The file is on the simulator now; the answer is code's. Pages drawn for a visual check go to the judge later.
+          const out = leasedId
+            ? await fileCheck({ file: line.file, udid: leasedId, bundleId: build?.bundleId ?? app, imageDir: runDir }).catch((err) => ({ suggested: "unsure", p: null, source: "code", detail: err.message }))
+            : { suggested: "unsure", p: null, source: "code", detail: "The simulator's id is unknown, so the file cannot be found." };
+          if (out.images?.length) Object.assign(item, { images: out.images.map((f) => basename(f)), detail: out.detail });
+          else Object.assign(item, { result: { suggested: out.suggested, p: out.p, ...(out.suggested === "unsure" ? { error: out.detail } : {}) }, detail: out.detail, source: out.source });
+        }
+        toJudge.push(item);
+      }
       if (run.status !== "completed") return;
     }
+  }
+
+  /** A suggestion for every checkpoint; a failure to judge is "unsure" and one warning, never a failed run. */
+  async function judgeCheckpoints() {
+    if (!toJudge.length) return;
+    onEvent({ type: "phase", phase: "judging" });
+    run.checkpoints = [];
+    for (const c of toJudge) {
+      const pictures = c.images ? { imagePaths: c.images.map((f) => join(runDir, f)) } : { imagePath: c.shot ? join(runDir, c.shot) : null };
+      const out =
+        c.result ??
+        (judge ? await judge({ expected: c.expected, screen: c.screen, ...pictures }) : { suggested: "unsure", p: null, error: "No judge is configured." });
+      const checkpoint = {
+        n: c.n,
+        lineIndex: c.lineIndex,
+        expected: c.expected,
+        suggested: out.suggested,
+        p: out.p,
+        image: c.shot,
+        ...(c.images ? { images: c.images } : {}),
+        ...(c.source ? { source: c.source } : {}),
+        ...(c.detail ? { detail: c.detail } : {}),
+        ...(out.error ? { error: out.error } : {}),
+      };
+      run.checkpoints.push(checkpoint);
+      onEvent({ type: "checkpoint", ...checkpoint });
+    }
+    if (judge) {
+      const unread = run.checkpoints.filter((c) => c.error && c.source !== "code");
+      if (unread.length) warnings.push(`The judge could not read ${unread.length} of ${run.checkpoints.length} checkpoints: ${unread[0].error}`);
+    }
+    run.judge = judge ? (judgeInfo ?? { backend: "unknown" }) : null;
+    if (run.status === "completed") run.suggestedVerdict = suggestVerdict(run.checkpoints);
   }
 
   async function saveVideo() {
@@ -138,6 +214,7 @@ export async function runTest({ test, app, build = null, runDir, call, install, 
   } finally {
     if (recording) await saveVideo().catch((err) => warnings.push(`The video was not saved: ${err.message}`));
     if (leased) await call("release").catch((err) => warnings.push(`The simulator may still be leased: ${err.message}`));
+    await judgeCheckpoints().catch((err) => warnings.push(`The judge failed: ${err.message}`));
     if (warnings.length) run.warnings = warnings;
     run.endedAt = now().toISOString();
     onEvent({ type: "run-end", run });

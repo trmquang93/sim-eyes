@@ -1,0 +1,44 @@
+{"image": "calendar.jpg", "expected": "Màn hình hiển thị \"What's New in Calendar\" với nút Continue", "want": "pass"}
+{"image": "calendar.jpg", "expected": "The screen offers a Continue button", "want": "pass"}
+{"image": "calendar.jpg", "expected": "Màn hình mô tả tính năng Apple Intelligence", "want": "pass"}
+{"image": "calendar.jpg", "expected": "Danh sách sự kiện trong ngày được hiển thị", "want": "fail"}
+{"image": "calendar.jpg", "expected": "A Settings screen is open", "want": "fail"}
+{"image": "files-browse.jpg", "expected": "On My iPhone is empty", "want": "pass"}
+{"image": "files-browse.jpg", "expected": "Thư mục On My iPhone trống, không có tệp nào", "want": "pass"}
+{"image": "files-browse.jpg", "expected": "The Browse tab is selected", "want": "pass"}
+{"image": "files-browse.jpg", "expected": "Danh sách có một thư mục tên Fixtures", "want": "fail"}
+{"image": "files-browse.jpg", "expected": "Tab Recents đang được chọn", "want": "fail"}
+{"image": "files-recents.jpg", "expected": "\"No Recents\" is shown", "want": "pass"}
+{"image": "files-recents.jpg", "expected": "Tab Recents đang được chọn", "want": "pass"}
+{"image": "files-recents.jpg", "expected": "A file named Report.pdf is listed", "want": "fail"}
+{"image": "files-recents.jpg", "expected": "Màn hình Browse đang mở", "want": "fail"}
+{"image": "messages.jpg", "expected": "The Messages list shows two conversations", "want": "pass"}
+{"image": "messages.jpg", "expected": "Có cuộc trò chuyện với số +1 (888) 555-1212", "want": "pass"}
+{"image": "messages.jpg", "expected": "Danh sách tin nhắn đang trống", "want": "fail"}
+{"image": "messages.jpg", "expected": "A conversation with Anna is listed", "want": "fail"}
+{"image": "messages.jpg", "expected": "Both conversations were received today", "want": "pass", "ambiguous": true}
+{"image": "safari-start.jpg", "expected": "Safari shows the Start Page with Favorites", "want": "pass"}
+{"image": "safari-start.jpg", "expected": "Có mục Privacy Report trên màn hình", "want": "pass"}
+{"image": "safari-start.jpg", "expected": "The address bar says \"Search or enter website\"", "want": "pass"}
+{"image": "safari-start.jpg", "expected": "Một trang web đang được tải", "want": "fail"}
+{"image": "safari-start.jpg", "expected": "The Favorites include Facebook", "want": "fail"}
+{"image": "settings-about.jpg", "expected": "iOS Version là 27.0", "want": "pass"}
+{"image": "settings-about.jpg", "expected": "The model name is iPhone 18 Pro Max", "want": "pass"}
+{"image": "settings-about.jpg", "expected": "iOS Version is 26.5", "want": "fail"}
+{"image": "settings-about.jpg", "expected": "Màn hình hiển thị danh sách General với hàng About", "want": "fail"}
+{"image": "settings-about.jpg", "expected": "The battery health is above 90 percent", "want": "fail", "ambiguous": true}
+{"image": "settings-main.jpg", "expected": "The Settings list shows General and Accessibility", "want": "pass"}
+{"image": "settings-main.jpg", "expected": "Có mục Apple Account yêu cầu đăng nhập", "want": "pass"}
+{"image": "settings-main.jpg", "expected": "Wi-Fi is the first row of the list", "want": "fail"}
+{"image": "settings-main.jpg", "expected": "Màn hình General đang mở", "want": "fail"}
+{"image": "settings-general.jpg", "expected": "General is open with an About row", "want": "pass"}
+{"image": "settings-general.jpg", "expected": "Có nút quay lại về Settings", "want": "pass"}
+{"image": "settings-general.jpg", "expected": "A Software Update row is shown", "want": "fail"}
+{"image": "settings-general.jpg", "expected": "The main Settings list is shown", "want": "fail"}
+{"image": "photos-whats-new.jpg", "expected": "Hiển thị \"What's New in Photos\" với nút Continue", "want": "pass"}
+{"image": "photos-whats-new.jpg", "expected": "The photo library grid is shown", "want": "fail"}
+{"image": "home-screen.jpg", "expected": "The iOS Home Screen with app icons is shown", "want": "pass"}
+{"image": "home-screen.jpg", "expected": "The Files app is open", "want": "fail"}
+{"image": "photo-viewer.jpg", "expected": "The photo viewer shows a green picture with the letter B", "want": "pass"}
+{"image": "photo-viewer.jpg", "expected": "The letter B fills most of the screen", "want": "fail"}
+{"image": "photo-viewer-zoomed.jpg", "expected": "The picture is zoomed in so the letter B is very large", "want": "pass"}

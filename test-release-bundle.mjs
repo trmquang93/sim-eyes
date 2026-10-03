@@ -36,5 +36,7 @@ for (const f of files.filter((f) => f.path.endsWith(".mjs"))) {
 // The files come from the same places build-app.sh copies, and not from anywhere else.
 const collected = await collectFiles();
 assert.ok(collected.includes("act.mjs") && collected.includes("ocr.swift") && collected.includes("studio/public/app.js"));
+// The PDF helper ships with Studio, but under studio/: an installed app rejects any other new top-level file in a bundle.
+assert.ok(collected.includes("studio/pdf-facts.swift"));
 
 console.log("test-release-bundle: ok");

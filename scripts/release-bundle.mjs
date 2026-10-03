@@ -24,7 +24,8 @@ export async function collectFiles(repo = REPO) {
   for (const name of await readdir(repo)) {
     if ((name.endsWith(".mjs") && !skipped(name)) || name === "ocr.swift" || name === "package.json") paths.push(name);
   }
-  for (const name of await readdir(join(repo, "studio"))) if (name.endsWith(".mjs") && !skipped(name)) paths.push(`studio/${name}`);
+  // pdf-facts.swift sits under studio/ (not at the top) because an app already installed only accepts top-level .mjs, ocr.swift and package.json.
+  for (const name of await readdir(join(repo, "studio"))) if ((name.endsWith(".mjs") && !skipped(name)) || name === "pdf-facts.swift") paths.push(`studio/${name}`);
   for (const name of await readdir(join(repo, "studio", "public"))) paths.push(`studio/public/${name}`);
   return paths.sort();
 }

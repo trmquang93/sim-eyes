@@ -75,7 +75,7 @@ try {
     assert.deepEqual(server.calls.map((c) => c.name === "batch" ? c.args.actions[0].tool + (c.args.actions[0].action ?? "") : c.name), ["acquire", "open", "recordstart", "tap", "look", "back", "recordstop", "release"]);
     assert.deepEqual(batches(server.calls)[0], { tool: "open", relaunch: true, save: join(runDir, "00.png") });
     assert.ok(server.calls.every((c) => c.name !== "batch" || c.args.image === false && c.args.app === "com.apple.Preferences"));
-    assert.deepEqual(events.filter((e) => e !== "phase"), ["step-start", "step-end", "step-start", "step-end", "step-start", "step-end", "step-start", "step-end", "run-end"]);
+    assert.deepEqual(events.filter((e) => e !== "phase"), ["step-start", "step-end", "step-start", "step-end", "step-start", "step-end", "step-start", "step-end", "checkpoint", "run-end"]);
     assert.equal(run.build, null, "no selected build: no install, build is null");
     assert.equal(run.install, undefined);
   }
@@ -182,6 +182,182 @@ try {
     const run = await runTest({ test, app: "x", runDir, call });
     assert.equal(run.steps[1].shot, "01.png");
     assert.equal(await readFile(join(runDir, "01.png"), "utf8"), "fail");
+  }
+
+  // Fixtures go in after the build and before the app starts: photos added after the app opened would not be in its first picker.
+  {
+    const server = fakeServer();
+    const order = [];
+    const applied = [];
+    const withFixtures = { ...test, start: "fresh", fixtures: ["photos-3", "fresh-permissions"] };
+    const run = await runTest({
+      test: withFixtures,
+      app: "com.example.app",
+      runDir: await newDir(),
+      build: { id: "b", version: "1", build: "1", bundleId: "com.example.app", appPath: "/b.app" },
+      call: async (name, args) => (order.push(name === "batch" ? args.actions[0].tool : name), server.call(name, args)),
+      install: async () => order.push("install"),
+      fixtures: async (p) => (order.push("fixtures"), applied.push(p), { applied: p.names, photos: 3, files: 0, privacy: ["all"] }),
+    });
+    assert.deepEqual(order.slice(0, 4), ["acquire", "install", "fixtures", "open"]);
+    assert.deepEqual(applied, [{ udid: UDID, names: ["photos-3", "fresh-permissions"], bundleId: "com.example.app" }]);
+    assert.equal(run.fixtures.ok, true);
+    assert.equal(run.fixtures.photos, 3);
+    assert.equal(run.status, "completed");
+    // A test with no fixtures never calls them, and without a build the udid is still read from the lease.
+    const none = await runTest({ test, app: "x", runDir: await newDir(), call: fakeServer().call, fixtures: async () => assert.fail("not asked for") });
+    assert.equal(none.fixtures, undefined);
+    const noBuild = [];
+    await runTest({ test: withFixtures, app: "x", runDir: await newDir(), call: fakeServer().call, fixtures: async (p) => (noBuild.push(p.udid), {}) });
+    assert.deepEqual(noBuild, [UDID]);
+  }
+
+  // A failed fixture phase must not run the test on a simulator without its photos, and must not leak the lease.
+  {
+    const server = fakeServer();
+    const run = await runTest({
+      test: { ...test, fixtures: ["photos-3"] },
+      app: "x",
+      runDir: await newDir(),
+      call: server.call,
+      fixtures: async () => {
+        throw new Error("simctl addmedia failed: error 3301.");
+      },
+    });
+    assert.equal(run.status, "failed");
+    assert.equal(run.failedAt, "fixtures");
+    assert.equal(run.reason, "simctl addmedia failed: error 3301.");
+    assert.equal(run.fixtures.ok, false);
+    assert.deepEqual(server.calls.map((c) => c.name), ["acquire", "release"]);
+    const noUdid = await runTest({ test: { ...test, fixtures: ["photos-3"] }, app: "x", runDir: await newDir(), call: fakeServer({ noUdid: true }).call, fixtures: async () => assert.fail("no guess") });
+    assert.equal(noUdid.failedAt, "fixtures");
+    assert.match(noUdid.reason, /did not say which simulator/);
+  }
+
+  // Every Check line carries a suggestion with the screenshot it judged; the verdict is for the case as a whole.
+  {
+    const server = fakeServer();
+    const order = [];
+    const judged = [];
+    const checks = {
+      ...test,
+      lines: [
+        { text: 'Tap "General"', step: { tool: "tap", label: "General" } },
+        { text: "Check A", step: { tool: "look" }, expected: "A is shown" },
+        { text: "Go back", step: { tool: "back" } },
+        { text: "Kiểm tra B", step: { tool: "look" }, expected: "B is gone" },
+      ],
+    };
+    const runDir = await newDir();
+    const run = await runTest({
+      test: checks,
+      app: "x",
+      runDir,
+      call: async (name, args) => (order.push(name), server.call(name, args)),
+      judge: async (p) => (order.push("judge"), judged.push(p), p.expected === "A is shown" ? { suggested: "pass", p: 0.95 } : { suggested: "fail", p: 0.03 }),
+      judgeInfo: { backend: "openrouter", model: "perplexity/pplx-decider-v1-27b" },
+    });
+    assert.equal(run.status, "completed");
+    assert.deepEqual(run.checkpoints.map((c) => [c.n, c.expected, c.suggested, c.p, c.image]), [
+      [2, "A is shown", "pass", 0.95, "02.png"],
+      [4, "B is gone", "fail", 0.03, "04.png"],
+    ]);
+    assert.equal(run.suggestedVerdict, "fail", "any failing checkpoint makes the case fail");
+    assert.deepEqual(run.judge, { backend: "openrouter", model: "perplexity/pplx-decider-v1-27b" });
+    assert.deepEqual(judged.map((j) => j.imagePath), [join(runDir, "02.png"), join(runDir, "04.png")], "the judge gets the screenshot the step saved");
+    assert.equal(judged[0].screen, 'screen: "Settings"', "and the screen text the step reported");
+    assert.ok(order.indexOf("release") < order.indexOf("judge"), "the simulator is released before the model is asked: it can take a minute per screenshot");
+  }
+
+  // No judge, or a judge that breaks: the run still completes, every checkpoint is "unsure", and the reviewer is told once.
+  {
+    const checks = { ...test, lines: [{ text: "Check A", step: { tool: "look" }, expected: "A is shown" }, { text: "Check B", step: { tool: "look" }, expected: "B" }] };
+    const off = await runTest({ test: checks, app: "x", runDir: await newDir(), call: fakeServer().call });
+    assert.equal(off.status, "completed");
+    assert.deepEqual(off.checkpoints.map((c) => c.suggested), ["unsure", "unsure"], "no judge means unsure");
+    assert.equal(off.suggestedVerdict, "unsure");
+    assert.equal(off.judge, null);
+    assert.equal(off.warnings, undefined, "a Mac with no judge configured is not a warning on every run");
+    const broken = await runTest({ test: checks, app: "x", runDir: await newDir(), call: fakeServer().call, judge: async () => ({ suggested: "unsure", p: null, error: "The judge is unreachable through OpenRouter" }), judgeInfo: { backend: "openrouter" } });
+    assert.equal(broken.status, "completed", "a judge that cannot answer never fails the run");
+    assert.match(broken.warnings[0], /could not read 2 of 2 checkpoints: The judge is unreachable/);
+    const thrown = await runTest({ test: checks, app: "x", runDir: await newDir(), call: fakeServer().call, judge: async () => { throw new Error("boom"); }, judgeInfo: { backend: "openrouter" } });
+    assert.equal(thrown.status, "completed");
+    assert.match(thrown.warnings[0], /The judge failed: boom/);
+    // A failed run is not given a suggested verdict: the app was not tested to the end. Checkpoints before the failure are still judged.
+    const failing = await runTest({ test: { ...test, lines: [{ text: "Check A", step: { tool: "look" }, expected: "A" }, { text: "Go back", step: { tool: "back" } }] }, app: "x", runDir: await newDir(), call: fakeServer({ failOn: (a) => (a.tool === "back" ? "back: stopped" : null) }).call, judge: async () => ({ suggested: "pass", p: 0.9 }), judgeInfo: { backend: "openrouter" } });
+    assert.equal(failing.status, "failed");
+    assert.equal(failing.checkpoints.length, 1);
+    assert.equal(failing.suggestedVerdict, undefined);
+    // A look that is not a Check (a plain look) is not a checkpoint.
+    const plain = await runTest({ test: { ...test, lines: [{ text: "Look", step: { tool: "look" } }] }, app: "x", runDir: await newDir(), call: fakeServer().call, judge: async () => assert.fail("nothing to judge") });
+    assert.equal(plain.checkpoints, undefined);
+  }
+
+  // A "Check the file" line is answered from the file on the simulator, with the simulator the run leased.
+  {
+    const asked = [];
+    const judged = [];
+    const fileLines = {
+      ...test,
+      lines: [
+        { text: 'Check the file "Doc.pdf" has 3 pages', step: { tool: "look" }, expected: 'the file "Doc.pdf" has 3 pages', file: { name: "Doc.pdf", op: "pages", n: 3 } },
+        { text: "Check the file \"Doc.pdf\": pages in order", step: { tool: "look" }, expected: "pages in order", file: { name: "Doc.pdf", op: "visual", about: "pages in order" } },
+        { text: "Check the list", step: { tool: "look" }, expected: "the list is shown" },
+      ],
+    };
+    const runDir = await newDir();
+    const run = await runTest({
+      test: fileLines,
+      app: "com.example.app",
+      runDir,
+      call: fakeServer().call,
+      fileCheck: async (p) => (asked.push(p), p.file.op === "visual" ? { suggested: "unsure", p: null, source: "judge", detail: "2 pages drawn", images: [join(runDir, "Doc.pdf-page-1.jpg"), join(runDir, "Doc.pdf-page-2.jpg")] } : { suggested: "fail", p: 1, source: "code", detail: "The file has 2 pages; expected 3." }),
+      judge: async (p) => (judged.push(p), { suggested: "pass", p: 0.9 }),
+      judgeInfo: { backend: "openrouter" },
+    });
+    assert.deepEqual(asked.map((a) => [a.udid, a.bundleId, a.imageDir, a.file.op]), [[UDID, "com.example.app", runDir, "pages"], [UDID, "com.example.app", runDir, "visual"]]);
+    assert.deepEqual(run.checkpoints.map((c) => [c.expected, c.suggested, c.p, c.source, c.detail]), [
+      ['the file "Doc.pdf" has 3 pages', "fail", 1, "code", "The file has 2 pages; expected 3."],
+      ["pages in order", "pass", 0.9, undefined, "2 pages drawn"],
+      ["the list is shown", "pass", 0.9, undefined, undefined],
+    ]);
+    assert.deepEqual(run.checkpoints[1].images, ["Doc.pdf-page-1.jpg", "Doc.pdf-page-2.jpg"]);
+    assert.equal(judged.length, 2, "code's answer is not sent to the model; the pages and the screen are");
+    assert.deepEqual(judged[0].imagePaths, [join(runDir, "Doc.pdf-page-1.jpg"), join(runDir, "Doc.pdf-page-2.jpg")], "the judge looks at the drawn pages in order");
+    assert.equal(run.suggestedVerdict, "fail", "a certain failure from code fails the case");
+    // A file check that throws, or a lease without an id, is unsure and does not fail the run.
+    const thrown = await runTest({ test: { ...test, lines: [fileLines.lines[0]] }, app: "x", runDir: await newDir(), call: fakeServer().call, fileCheck: async () => { throw new Error("swiftc missing"); } });
+    assert.equal(thrown.status, "completed");
+    assert.deepEqual([thrown.checkpoints[0].suggested, thrown.checkpoints[0].error], ["unsure", "swiftc missing"]);
+    const noId = await runTest({ test: { ...test, lines: [fileLines.lines[0]] }, app: "x", runDir: await newDir(), call: fakeServer({ noUdid: true }).call, fileCheck: async () => assert.fail("no guess") });
+    assert.equal(noId.checkpoints[0].suggested, "unsure");
+    assert.match(noId.checkpoints[0].error, /id is unknown/);
+    // Without a file checker (an old Studio), the line is judged like any screen check.
+    const plain = await runTest({ test: { ...test, lines: [fileLines.lines[0]] }, app: "x", runDir: await newDir(), call: fakeServer().call, judge: async () => ({ suggested: "pass", p: 0.9 }), judgeInfo: { backend: "openrouter" } });
+    assert.equal(plain.checkpoints[0].suggested, "pass");
+  }
+
+  // Stop ends the run before the next step; the video is saved and the lease released like any other end.
+  {
+    const server = fakeServer();
+    let stop = false;
+    const run = await runTest({
+      test,
+      app: "x",
+      runDir: await newDir(),
+      call: async (name, args) => {
+        const out = await server.call(name, args);
+        if (name === "batch" && args.actions[0].tool === "tap") stop = true;
+        return out;
+      },
+      shouldStop: () => stop,
+    });
+    assert.equal(run.status, "stopped");
+    assert.equal(run.reason, "Stopped by the tester.");
+    assert.equal(run.steps.length, 2, "the step in flight finished, the next did not start");
+    assert.equal(server.calls.at(-1).name, "release");
+    assert.ok(batches(server.calls).some((a) => a.action === "stop"), "the recording is stopped");
   }
 
   // The start step follows the test's setting.

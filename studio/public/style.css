@@ -123,3 +123,27 @@ video { width: 100%; max-width: 360px; border-radius: var(--radius); background:
 .new-step { border-style: dashed; }
 .delete-run { margin: 24px 0 8px; }
 .row button.danger { margin-left: 8px; }
+
+/* cases, suites, fixtures */
+.title-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.case-id { font-family: var(--mono); font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; white-space: nowrap; }
+.row.skipped { opacity: 0.75; }
+.pick { width: 18px; height: 18px; flex: none; }
+.filters { flex-wrap: wrap; align-items: end; margin-bottom: 8px; }
+.run-bar { margin-bottom: 10px; padding: 10px 14px; }
+.suites { margin-top: 12px; }
+.suites summary { cursor: pointer; color: var(--muted); }
+.case-fields .field + .field { margin-top: 8px; }
+.case-fields textarea { width: 100%; }
+.checks { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.check { display: inline-flex; gap: 6px; align-items: center; }
+.suggestion { margin: 6px 0; }
+.suggestion .pages { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.suggestion .pages img { height: 110px; border: 1px solid var(--line); border-radius: 4px; cursor: zoom-in; }
+.suggested { margin: 0 0 8px; }
+.suite-table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); margin-top: 12px; }
+.suite-table th, .suite-table td { text-align: left; padding: 8px 12px; border-top: 1px solid var(--line); vertical-align: top; }
+.suite-table th { color: var(--muted); font-weight: 600; font-size: 13px; border-top: 0; }
+.suite-row.skipped td, .suite-row.not-run td { color: var(--muted); }
+.inline.form { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
+.inline.form .field.grow { flex: 1; min-width: 160px; }

@@ -42,7 +42,7 @@ try {
   const batch = tools.find((t) => t.name === "batch");
   assert.match(batch.description, /\| step \| Use when \|/);
   // Every screen step is a row of the table, and agents are told what a "not confirmed" result means.
-  for (const name of ["tap", "tap_at", "back", "scroll", "swipe", "type", "key", "drag", "long_press", "wait", "look", "goal", "open", "record"]) {
+  for (const name of ["tap", "tap_at", "back", "scroll", "swipe", "pinch", "type", "key", "drag", "long_press", "wait", "look", "goal", "open", "record"]) {
     assert.match(batch.description, new RegExp(`\\| ${name} \\|`), name);
   }
   assert.match(batch.description, /acted but not confirmed/);
@@ -60,7 +60,7 @@ try {
   assert.equal(batch.inputSchema.properties.image.type, "boolean");
   assert.equal(batch.inputSchema.properties.continue_on_fail.type, "boolean");
   const step = batch.inputSchema.properties.actions.items.properties;
-  assert.deepEqual(step.tool.enum, ["tap", "tap_at", "back", "scroll", "swipe", "type", "key", "drag", "long_press", "wait", "look", "goal", "open", "record"]);
+  assert.deepEqual(step.tool.enum, ["tap", "tap_at", "back", "scroll", "swipe", "pinch", "type", "key", "drag", "long_press", "wait", "look", "goal", "open", "record"]);
   for (const field of ["label", "nth", "x", "y", "direction", "times", "from", "to", "hold_ms", "text", "into", "submit", "key", "ms", "goal", "max_steps", "wait_ms", "quick", "controls", "reset", "relaunch", "frames", "save"]) {
     assert.ok(step[field], field);
   }

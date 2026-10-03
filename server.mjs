@@ -22,7 +22,7 @@ import {
 import { needsShot, shortBatchReminder } from "./batch-plan.mjs";
 import { TAP_FALLBACK_STEPS, helpRequest, notRunText, pausedReminder, stepFailed, tapResult, tapWithFallback } from "./tap-recovery.mjs";
 import { staleSimEyesSessions } from "./stale-sessions.mjs";
-import { BACK_GOAL, backTargets, dragEnds, gestureNode, tapGoalNames, tapTarget } from "./act-direct.mjs";
+import { BACK_GOAL, backTargets, dragEnds, gestureNode, pinchPlan, tapGoalNames, tapTarget } from "./act-direct.mjs";
 import { controlsLine, coveredControlsLine, coveredScreenLine, screenLine } from "./screen-summary.mjs";
 import { screenCover } from "./cover-check.mjs";
 import { needsOcr, ocrTargets, recognizeText, screenDiff } from "./ocr.mjs";
@@ -658,7 +658,7 @@ async function measuredGesture(name, what, perform) {
   return {
     outcome: "stopped",
     landed: false,
-    summary: `${label}stopped, ${what} but the screen did not change.${name === "scroll" ? " It is already at the end, or nothing scrolls here." : " The target may not accept it, or it needs a longer hold_ms."}`,
+    summary: `${label}stopped, ${what} but the screen did not change.${name === "scroll" ? " It is already at the end, or nothing scrolls here." : name === "pinch" ? " Nothing on this screen zooms, or it is already as zoomed as it goes." : " The target may not accept it, or it needs a longer hold_ms."}`,
   };
 }
 
@@ -878,6 +878,12 @@ async function swipeStep(args) {
   return measuredGesture("swipe", `swiped from (${x1}, ${y1}) to (${x2}, ${y2})`, () => runAd(["swipe", String(x1), String(y1), String(x2), String(y2)]));
 }
 
+/** Zoom a picture, map or page: a two-finger pinch. scale above 1 spreads the fingers (zoom in), below 1 closes them (zoom out). */
+async function pinchStep(args) {
+  const { scale, centre, what } = pinchPlan(args);
+  return measuredGesture("pinch", what, () => runAd(["gesture", "pinch", String(scale), ...centre.map(String)]));
+}
+
 /** The `type` step: the text goes verbatim into a field (`into` names it, or the only field on screen). */
 async function typeStep(args) {
   if (args.text == null) throw new Error('type needs text: the exact text to enter, e.g. {"tool":"type","into":"Search","text":"clip"}.');
@@ -932,6 +938,7 @@ const SCREEN_STEPS = {
   back: backStep,
   scroll: scrollStep,
   swipe: swipeStep,
+  pinch: pinchStep,
   type: typeStep,
   key: keyStep,
   drag: dragStep,
@@ -1000,6 +1007,7 @@ Each step is one object: { "tool": <step>, ...args }.
 | back | Navigate back with the screen's Back control | none |
 | scroll | Move through a list or page | direction (down shows what is below; up, left, right); times (default 1, max 10) |
 | swipe | A raw swipe (pan a map, pull, edge swipe) | from {x,y}, to {x,y} |
+| pinch | Zoom a picture, map or page with two fingers | scale (above 1 zooms in, e.g. 2; below 1 zooms out, e.g. 0.5; 0.2–5); x, y (optional centre, points) |
 | type | Enter text in a field (it replaces what the field holds: no clear step needed) | text (verbatim: the only text sim-eyes enters); into (label or placeholder of the field; optional when one field is on screen); submit:true presses return |
 | key | The keyboard | key: "return" or "dismiss" |
 | drag | Reorder or move an item | from, to (a visible label such as a page number or row title, or {x,y}); hold_ms (default 600) |
@@ -1142,15 +1150,16 @@ Response: one entry per step (its result, then the screen it left behind), a lin
                 tool: {
                   type: "string",
                   enum: [...STEP_TOOLS],
-                  description: "The step: tap, tap_at, back, scroll, swipe, type, key, drag, long_press, wait, look, goal, open or record. See the table in the batch description.",
+                  description: "The step: tap, tap_at, back, scroll, swipe, pinch, type, key, drag, long_press, wait, look, goal, open or record. See the table in the batch description.",
                 },
                 label: {
                   type: "string",
                   description: "tap: the exact label of the control or text to tap. long_press: the label of the element to hold.",
                 },
                 nth: { type: "number", description: "tap: which of several controls that share this label ON SCREEN RIGHT NOW (1-based, top to bottom, then left to right). Only when the error listed several; it does not count repeated taps in the batch." },
-                x: { type: "number", description: "tap_at, long_press: horizontal position of the point, in points." },
-                y: { type: "number", description: "tap_at, long_press: vertical position of the point, in points." },
+                x: { type: "number", description: "tap_at, long_press: horizontal position of the point, in points. pinch: optional centre." },
+                y: { type: "number", description: "tap_at, long_press: vertical position of the point, in points. pinch: optional centre." },
+                scale: { type: "number", description: "pinch: above 1 zooms in (2 = twice as big), below 1 zooms out (0.5 = half). 0.2–5." },
                 direction: { type: "string", enum: ["down", "up", "left", "right"], description: "scroll: the way to move through the content (down shows what is below)." },
                 times: { type: "number", description: "scroll: how many swipes (default 1, max 10)." },
                 from: { ...GESTURE_TARGET, description: "drag: the element to pick up (label or point). swipe: the start point {x, y}." },

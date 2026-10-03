@@ -11,6 +11,8 @@ services:
     read_only: true
     environment:
       TYPESAFE_API_KEY: ${TYPESAFE_API_KEY}
+      # Optional: the OpenRouter key for Studio's screenshot judge (pplx-decider). Without JUDGE_KEY the /judge route answers 503.
+      JUDGE_KEY: ${JUDGE_KEY:-}
       RATE_PER_MINUTE: ${RATE_PER_MINUTE:-60}
       RATE_PER_DAY: ${RATE_PER_DAY:-3000}
     volumes:

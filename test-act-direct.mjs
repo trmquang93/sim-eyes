@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { BACK_GOAL, backTargets, dragEnds, gestureNode, tapGoalNames, tapTarget } from "./act-direct.mjs";
+import { BACK_GOAL, backTargets, dragEnds, gestureNode, pinchPlan, tapGoalNames, tapTarget } from "./act-direct.mjs";
 import { controlsLine, screenLine } from "./screen-summary.mjs";
 import { listTargets, screenContext } from "./targets.mjs";
 
@@ -131,5 +131,12 @@ const tree = (name) => JSON.parse(readFileSync(new URL(`./fixtures/trees/${name}
   assert.ok(!tapGoalNames("go back", "Back"), "only tap goals are confirmed by the tap itself");
   assert.ok(!tapGoalNames("tap Done", ""));
 }
+
+// pinch: a scale of 1 or one outside the range would report a gesture that did nothing as a step that ran.
+assert.deepEqual(pinchPlan({ scale: 2 }), { scale: 2, centre: [], what: "pinched open (zoom in) by 2" });
+assert.deepEqual(pinchPlan({ scale: "0.5", x: 200.4, y: 400 }), { scale: 0.5, centre: [200, 400], what: "pinched closed (zoom out) by 0.5 around (200, 400)" });
+for (const bad of [{}, { scale: 1 }, { scale: 0 }, { scale: 6 }, { scale: 0.1 }, { scale: "big" }, { scale: null }]) assert.throws(() => pinchPlan(bad), /pinch needs scale between 0.2 and 5/, JSON.stringify(bad));
+assert.throws(() => pinchPlan({ scale: 2, x: 100 }), /both x and y/, "half a centre is a mistake, not a default");
+assert.throws(() => pinchPlan({ scale: 2, x: "a", y: 3 }), /both x and y/);
 
 console.log("test-act-direct: ok");

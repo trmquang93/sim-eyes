@@ -7,22 +7,28 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
 import http from "node:http";
 import { dirname, extname, join } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { judgeClient } from "./judge-client.mjs";
 import { Refusal, addBuild, buildAppPath, cleanUploads, installBuild, listBuilds, realExec, removeBuild, uploadPath } from "./builds.mjs";
+import { checkFile } from "./file-facts.mjs";
+import { applyFixtures } from "./fixtures.mjs";
+import { judgeCheckpoint } from "./judge.mjs";
 import { openSimEyes } from "./mcp-client.mjs";
 import { studioClient, mapLines } from "./map-line.mjs";
 import { runTest } from "./run-test.mjs";
 import * as store from "./store.mjs";
+import { expandSelector, runSuite } from "./suite.mjs";
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), "public");
 const CODE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 const MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_FILE_BYTES = 1024 * 1024 * 1024;
+const MAX_FIXTURE_BYTES = 200 * 1024 * 1024;
 const STARTS = ["fresh", "relaunch", "as-is"];
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json", ".png": "image/png", ".jpg": "image/jpeg", ".mp4": "video/mp4", ".txt": "text/plain; charset=utf-8" };
 
@@ -83,16 +89,71 @@ function checkOrigin(req, port) {
   if (origin && !allowed.has(new URL(origin).host)) throw new HttpError(403, "Studio does not take requests from other pages.");
 }
 
-export async function startStudio({ root = store.defaultRoot(), port = 4777, openBrowser = false, openSim = openSimEyes, exec = realExec, mapClient = studioClient } = {}) {
+/** The judge Studio uses: pplx-decider when this Mac is set up for it (judge-client.mjs), else none and every checkpoint is "unsure". */
+export function defaultJudge(env = process.env) {
+  const client = judgeClient({ env });
+  return client ? { info: { backend: client.backend, model: client.model }, run: (p) => judgeCheckpoint(p, { client }) } : null;
+}
+
+/** A path inside a project's fixtures folder from what a URL carried; anything that could leave the folder is refused. */
+function fixtureRelPath(rel) {
+  const parts = String(rel).split("/");
+  if (!rel || rel.length > 200 || parts.some((s) => !s || s === "." || s === ".." || s.startsWith(".") || /[\\\0]/.test(s))) throw new HttpError(400, "That is not a valid fixture file path.");
+  return parts.join("/");
+}
+
+async function listFixtureFiles(dir, base = dir, depth = 0) {
+  const out = [];
+  for (const e of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+    if (e.name.startsWith(".")) continue;
+    const full = join(dir, e.name);
+    if (e.isDirectory() && depth < 3) out.push(...(await listFixtureFiles(full, base, depth + 1)));
+    else if (e.isFile() && !(dir === base && e.name === "fixtures.json")) out.push({ path: full.slice(base.length + 1), bytes: (await stat(full)).size });
+  }
+  return out.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/** The fixture sets as the tester wrote them, checked: names, and lists of relative paths. */
+function checkedSets(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new HttpError(400, "The fixture sets must be an object.");
+  const out = {};
+  for (const [name, set] of Object.entries(input)) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$/.test(name)) throw new HttpError(400, `Not a valid set name: ${JSON.stringify(name)}.`);
+    const list = (key) => {
+      const v = set?.[key];
+      if (v == null) return undefined;
+      if (!Array.isArray(v) || v.some((x) => typeof x !== "string" || !x.trim() || x.startsWith("/") || x.split("/").includes(".."))) throw new HttpError(400, `${name}: ${key} must be a list of paths inside the fixtures folder.`);
+      return v.map((x) => x.trim());
+    };
+    const reset = set?.privacyReset;
+    if (reset != null && reset !== true && typeof reset !== "string" && !(Array.isArray(reset) && reset.every((x) => typeof x === "string"))) throw new HttpError(400, `${name}: privacyReset must be a permission name, a list of them, or true.`);
+    out[name] = { ...(list("photos") ? { photos: list("photos") } : {}), ...(list("files") ? { files: list("files") } : {}), ...(reset != null ? { privacyReset: reset } : {}) };
+  }
+  return out;
+}
+
+/** Case fields from a request body; a bad priority or skip reason is the tester's to fix (400), not a Studio error. */
+const fieldsOf = (input) => {
+  try {
+    return store.caseFields(input);
+  } catch (err) {
+    throw new HttpError(400, err.message);
+  }
+};
+
+export async function startStudio({ root = store.defaultRoot(), port = 4777, openBrowser = false, openSim = openSimEyes, exec = realExec, mapClient = studioClient, judge = defaultJudge(), ledgerPath, devicesRoot, fileDeps = {} } = {}) {
   await mkdir(root, { recursive: true });
   const runs = new Map(); // runId -> { events, clients, done }
   let active = null;
+  let activeSuite = null;
+  const stops = new Set(); // runIds and suiteIds the tester asked to stop
   const sockets = new Set();
 
   const runKey = (project, test, stamp) => `${project}.${test}.${stamp}`;
 
-  async function startRun(projectSlug, testSlug) {
-    if (active) throw new HttpError(409, "A run is already in progress. Wait for it to end.");
+  /** Starts a run and returns at once; `finished` settles with the run's outcome. A suite starts its own runs (`suite`), one at a time. */
+  async function startRun(projectSlug, testSlug, { suite = null } = {}) {
+    if (active || (activeSuite && !suite)) throw new HttpError(409, "A run is already in progress. Wait for it to end.");
     const project = await store.readProject(root, projectSlug);
     const test = await store.readTest(root, projectSlug, testSlug);
     if (!test.lines.some((l) => l.step)) throw new HttpError(400, "This test has no steps yet. Write a line and save it.");
@@ -101,6 +162,7 @@ export async function startStudio({ root = store.defaultRoot(), port = 4777, ope
     const build = project.build ? (await listBuilds(dir)).find((b) => b.id === project.build) : null;
     if (project.build && !build) throw new HttpError(400, "The selected build is gone. Pick another build.");
 
+    const sets = test.fixtures?.length ? await store.readFixtureSets(root, projectSlug) : {};
     const { stamp, dir: runDir } = await store.newRunDir(root, projectSlug, testSlug);
     const runId = runKey(projectSlug, testSlug, stamp);
     const state = { events: [], clients: new Set(), done: false };
@@ -114,7 +176,7 @@ export async function startStudio({ root = store.defaultRoot(), port = 4777, ope
       state.events.push(event);
       for (const res of state.clients) res.write(`data: ${JSON.stringify(event)}\n\n`);
     };
-    (async () => {
+    const finished = (async () => {
       let sim;
       let run;
       try {
@@ -126,6 +188,11 @@ export async function startStudio({ root = store.defaultRoot(), port = 4777, ope
           runDir,
           call: sim.call,
           install: (p) => installBuild(p, { exec }),
+          fixtures: (p) => applyFixtures({ ...p, sets, fixturesDir: store.fixturesDir(root, projectSlug), exec, ...(ledgerPath ? { ledgerPath } : {}), ...(devicesRoot ? { devicesRoot } : {}) }),
+          fileCheck: (p) => checkFile({ ...p, deps: { ...(devicesRoot ? { devicesRoot } : {}), ...fileDeps } }),
+          judge: judge?.run ?? null,
+          judgeInfo: judge?.info ?? null,
+          shouldStop: () => stops.has(runId) || (suite != null && stops.has(suite)),
           onEvent: (e) => e.type !== "run-end" && emit(e),
         });
       } catch (err) {
@@ -135,13 +202,73 @@ export async function startStudio({ root = store.defaultRoot(), port = 4777, ope
       }
       await store.writeRun(root, projectSlug, testSlug, stamp, run);
       active = null;
+      stops.delete(runId);
       state.done = true;
       emit({ type: "run-end", status: run.status });
       for (const res of state.clients) res.end();
       state.clients.clear();
+      return { stamp, status: run.status, suggestedVerdict: run.suggestedVerdict, reason: run.reason };
     })();
-    return { runId, stamp };
+    return { runId, stamp, finished };
   }
+
+  async function startSuite(projectSlug, selector) {
+    if (active || activeSuite) throw new HttpError(409, "A run is already in progress. Wait for it to end.");
+    await store.readProject(root, projectSlug);
+    let picked;
+    try {
+      picked = expandSelector(await store.listTests(root, projectSlug), selector);
+    } catch (err) {
+      throw new HttpError(400, err.message);
+    }
+    const { stamp } = await store.newSuiteDir(root, projectSlug);
+    const suiteId = `suite.${projectSlug}.${stamp}`;
+    const state = { events: [], clients: new Set(), done: false };
+    runs.set(suiteId, state);
+    activeSuite = suiteId;
+    const emit = (event) => {
+      state.events.push(event);
+      for (const res of state.clients) res.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+    (async () => {
+      try {
+        await runSuite({
+          tests: picked,
+          selector,
+          save: (suite) => store.writeSuite(root, projectSlug, stamp, suite),
+          shouldStop: () => stops.has(suiteId),
+          onEvent: emit,
+          runOne: async (testSlug) => {
+            const started = await startRun(projectSlug, testSlug, { suite: suiteId });
+            emit({ type: "run-started", test: testSlug, runId: started.runId, stamp: started.stamp });
+            return started.finished;
+          },
+        });
+      } catch (err) {
+        console.error(err);
+      } finally {
+        activeSuite = null;
+        stops.delete(suiteId);
+        state.done = true;
+        emit({ type: "suite-end", stamp });
+        for (const res of state.clients) res.end();
+        state.clients.clear();
+      }
+    })();
+    return { suiteId, stamp };
+  }
+
+  /** A suite.json that says "running" but is not the active suite was cut off (Studio stopped): say so. */
+  const settleSuite = (project, suite) => (suite.status === "running" && activeSuite !== `suite.${project}.${suite.stamp}` ? { ...suite, status: "error", reason: "Studio stopped before this suite ended." } : suite);
+
+  /** A duplicate case ID is a conflict, not a malformed request. */
+  const writeTestChecked = async (project, slug, test) => {
+    try {
+      await store.writeTest(root, project, slug, test);
+    } catch (err) {
+      throw /already used by/.test(err.message) ? new HttpError(409, err.message) : err;
+    }
+  };
 
   /** A run.json that says "running" but is not the active run was cut off (Studio stopped): say so. */
   const settle = (project, test, run) =>
@@ -151,7 +278,7 @@ export async function startStudio({ root = store.defaultRoot(), port = 4777, ope
   const route = (method, pattern, handler) => routes.push({ method, re: new RegExp(`^${pattern}$`), handler });
   const S = "([^/]+)";
 
-  route("GET", "/api/status", async () => ({ typesafe: Boolean(process.env.TYPESAFE_API_KEY), root, activeRun: active, bundleVersion: await codeVersion() }));
+  route("GET", "/api/status", async () => ({ typesafe: Boolean(process.env.TYPESAFE_API_KEY), mapper: Boolean(mapClient()), root, activeRun: active, activeSuite, judge: judge?.info ?? null, bundleVersion: await codeVersion() }));
   route("GET", "/api/projects", async () => store.listProjects(root));
   route("POST", "/api/projects", async (req) => {
     const { name, app } = await readJsonBody(req);
@@ -160,25 +287,30 @@ export async function startStudio({ root = store.defaultRoot(), port = 4777, ope
   route("GET", `/api/projects/${S}`, async (_req, [p]) => store.readProject(root, p));
   route("GET", `/api/projects/${S}/tests`, async (_req, [p]) => store.listTests(root, p));
   route("POST", `/api/projects/${S}/tests`, async (req, [p]) => {
-    const { name } = await readJsonBody(req);
-    const slug = store.slug(name);
-    if (await store.readTest(root, p, slug).catch(() => null)) throw new HttpError(409, `A test named "${name}" already exists.`);
-    await store.writeTest(root, p, slug, { name: String(name).trim(), start: "fresh", lines: [], savedAt: new Date().toISOString() });
+    const body = await readJsonBody(req);
+    const slug = store.slug(body.name);
+    if (await store.readTest(root, p, slug).catch(() => null)) throw new HttpError(409, `A test named "${body.name}" already exists.`);
+    await writeTestChecked(p, slug, { name: String(body.name).trim(), start: "fresh", lines: [], ...fieldsOf(body), savedAt: new Date().toISOString() });
     return store.readTest(root, p, slug);
   });
   route("GET", `/api/projects/${S}/tests/${S}`, async (_req, [p, t]) => store.readTest(root, p, t));
   route("PUT", `/api/projects/${S}/tests/${S}`, async (req, [p, t]) => {
-    const { name, start, lines } = await readJsonBody(req);
+    const body = await readJsonBody(req);
+    const { name, start, lines } = body;
     if (!STARTS.includes(start)) throw new HttpError(400, `The start must be one of: ${STARTS.join(", ")}.`);
     if (!Array.isArray(lines) || lines.some((l) => typeof l !== "string")) throw new HttpError(400, "lines must be a list of sentences.");
     const previous = await store.readTest(root, p, t).catch(() => null);
     const mapped = await mapLines(lines, previous?.lines ?? [], { client: mapClient() });
-    const test = { name: String(name ?? previous?.name ?? t).trim() || t, start, lines: mapped, savedAt: new Date().toISOString() };
-    await store.writeTest(root, p, t, test);
+    const fields = fieldsOf(Object.fromEntries(Object.keys(fieldsOf()).map((k) => [k, k in body ? body[k] : previous?.[k]])));
+    const test = { name: String(name ?? previous?.name ?? t).trim() || t, start, lines: mapped, ...fields, savedAt: new Date().toISOString() };
+    await writeTestChecked(p, t, test);
     return { slug: t, ...test };
   });
   route("DELETE", `/api/projects/${S}/tests/${S}`, async (_req, [p, t]) => (await store.deleteTest(root, p, t), { ok: true }));
-  route("POST", `/api/projects/${S}/tests/${S}/run`, async (_req, [p, t]) => startRun(p, t));
+  route("POST", `/api/projects/${S}/tests/${S}/run`, async (_req, [p, t]) => {
+    const { runId, stamp } = await startRun(p, t);
+    return { runId, stamp };
+  });
   route("GET", `/api/projects/${S}/runs/${S}`, async (_req, [p, t]) => (await store.listRuns(root, p, t)).map((r) => settle(p, t, r)));
   route("GET", `/api/projects/${S}/runs/${S}/${S}`, async (_req, [p, t, s]) => settle(p, t, await store.readRun(root, p, t, s)));
   // A run still going keeps its folder: it is writing screenshots and a video into it.
@@ -193,6 +325,42 @@ export async function startStudio({ root = store.defaultRoot(), port = 4777, ope
     return { deleted: stamps.length };
   });
   route("PUT", `/api/projects/${S}/runs/${S}/${S}/verdict`, async (req, [p, t, s]) => store.setVerdict(root, p, t, s, await readJsonBody(req)));
+
+  route("POST", `/api/projects/${S}/runs/${S}/${S}/stop`, async (_req, [p, t, s]) => {
+    const id = runKey(p, t, s);
+    if (active !== id) throw new HttpError(409, "This run is not going.");
+    stops.add(id);
+    return { ok: true };
+  });
+
+  // Suites: run the ticked tests, or a group, one after another.
+  route("POST", `/api/projects/${S}/suites`, async (req, [p]) => startSuite(p, (await readJsonBody(req)).selector));
+  route("GET", `/api/projects/${S}/suites`, async (_req, [p]) => (await store.listSuites(root, p)).map((s) => settleSuite(p, s)));
+  route("GET", `/api/projects/${S}/suites/${S}`, async (_req, [p, s]) => settleSuite(p, await store.readSuite(root, p, s)));
+  route("POST", `/api/projects/${S}/suites/${S}/stop`, async (_req, [p, s]) => {
+    const id = `suite.${p}.${s}`;
+    if (activeSuite !== id) throw new HttpError(409, "This suite is not going.");
+    stops.add(id);
+    return { ok: true };
+  });
+
+  // Fixtures: named sets and the files they use, kept in the project's fixtures folder.
+  const fixturesState = async (p) => ({ sets: await store.readFixtureSets(root, p), files: await listFixtureFiles(store.fixturesDir(root, p)) });
+  route("GET", `/api/projects/${S}/fixtures`, async (_req, [p]) => fixturesState(p));
+  route("PUT", `/api/projects/${S}/fixtures`, async (req, [p]) => {
+    await store.readProject(root, p);
+    await store.writeFixtureSets(root, p, checkedSets((await readJsonBody(req)).sets));
+    return fixturesState(p);
+  });
+  route("PUT", `/api/projects/${S}/fixtures/files/(.+)`, async (req, [p, rel]) => {
+    await store.readProject(root, p);
+    await saveBody(req, join(store.fixturesDir(root, p), fixtureRelPath(decodeURIComponent(rel))), MAX_FIXTURE_BYTES);
+    return fixturesState(p);
+  });
+  route("DELETE", `/api/projects/${S}/fixtures/files/(.+)`, async (_req, [p, rel]) => {
+    await rm(join(store.fixturesDir(root, p), fixtureRelPath(decodeURIComponent(rel))), { force: true });
+    return fixturesState(p);
+  });
 
   // Builds
   const projectBuilds = async (p) => ({ builds: await listBuilds(store.buildsDir(root, p)), selected: (await store.readProject(root, p)).build ?? null, app: (await store.readProject(root, p)).app });
