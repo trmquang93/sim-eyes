@@ -118,7 +118,7 @@ export async function acquireLease({
   worktree,
   owner,
   ttl,
-  timeout = 5,
+  timeout = 120,
 } = {}) {
   const bin = resolveSimPool();
   if (!bin) {
