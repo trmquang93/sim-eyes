@@ -160,3 +160,7 @@ video { width: 100%; max-width: 360px; border-radius: var(--radius); background:
 .ungrouped { font-size: 14px; color: var(--muted); margin: 16px 0 6px; font-weight: 600; }
 .move-bar { margin-top: 8px; }
 .move-bar input[type=text] { flex: 1; min-width: 220px; }
+
+.settings-link { margin-left: auto; color: inherit; }
+.choice { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; }
+.choice input { margin-top: 4px; }
