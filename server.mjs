@@ -31,6 +31,7 @@ import {
   ACT_DONE_MIN,
   ACT_MAX_STEPS,
   EFFECT_BAND,
+  confirmGoal,
   decideStep,
   effectRecord,
   effectText,
@@ -758,16 +759,25 @@ async function actOn(instruction, args) {
       return finish("done", `done after ${history.length} step(s) (done p=${doneP}).`);
     }
     const acted = history.length > 0;
-    // Taken steps whose result the screen's controls and text cannot confirm (a checkmark, a switch).
-    const unconfirmed = (why) =>
-      finish(
+    // Steps ran but the loop is out of steps or confidence: describe the screen to TypeSafe and ask whether the goal was achieved.
+    const unconfirmed = async (why) => {
+      const { verdict, confidence } = await confirmGoal({
+        instruction, text, targets, history, client, screen: ctx.screenSize, context: cover.hidden ? null : ctx.lastScreen, nodes: cover.hidden ? [] : ctx.lastNodes,
+      });
+      const p = confidence.toFixed(2);
+      if (verdict === "achieved") return finish("done", `done after ${history.length} step(s) (confirmed from the screen: achieved p=${p}).`);
+      if (verdict === "not achieved") {
+        return finish("stopped", `not reached (${why}; checked against the screen: not achieved p=${p}). ${history.length} step(s) taken. Reword the goal, give it more max_steps, or use exact steps.`);
+      }
+      return finish(
         "acted",
         `acted but not confirmed (${why}). ${history.length} step(s) taken${
           lastEffect ? `; the last one ${lastEffect}` : ""
         }. The goal could not be confirmed from the controls or text on screen: check the screenshot.`
       );
+    };
     if (history.length >= maxSteps) {
-      return unconfirmed(`done p=${doneP} after ${maxSteps} step(s)`);
+      return await unconfirmed(`done p=${doneP} after ${maxSteps} step(s)`);
     }
     if (!trustedAction(step, history)) {
       const noBack = !acted && BACK_GOAL.test(instruction) && !cover.hidden && backTargets(targets).length === 0;
@@ -776,7 +786,7 @@ async function actOn(instruction, args) {
         : noBack
           ? "this screen has no Back button, so there is nothing to go back to (a tab root?)"
           : "no action on this screen helps";
-      if (acted) return unconfirmed(why);
+      if (acted) return await unconfirmed(why);
       // The Photos picker's close X and a permission sheet's icons have no text, so neither the tree nor OCR can name them.
       const coverHint = cover.hidden ? " A view outside the app covers the screen and its icon-only controls (the Photos picker's close X) have no text to read: look at the screenshot and use tap_at on the control." : "";
       return finish(
@@ -1023,7 +1033,7 @@ Any step also takes: save (screenshot path), controls:true (list controls with p
 Rules:
 - Only the last step returns a screenshot (and any step that fails). Pass image:false on the batch to leave it out when the text is enough, and save with an absolute path to keep one of an earlier step.
 - back, scroll and the other exact steps never guess: a label that is not on screen or is shared is an error that lists what is there. That is the cue to use goal or nth, not to look. tap is exact too, but when it fails it falls back to a goal (next lines).
-- Results: "done" means the step did what it says and the screen changed or the goal was confirmed. "acted but not confirmed" means the tap ran but nothing visibly changed or the goal could not be read from the screen: when the last step visibly changed the screen the batch continues, otherwise it stops. "stopped" or "stuck" means nothing useful happened and the batch stops. Pass continue_on_fail:true on the batch to keep going anyway.
+- Results: "done" means the step did what it says and the screen changed or the goal was confirmed. "acted but not confirmed" means the tap ran but nothing visibly changed or the goal could not be read from the screen: when the last step visibly changed the screen the batch continues, otherwise it stops. A goal that runs out of steps or confidence is checked once more: the screen is described to TypeSafe, which says achieved (done), not achieved ("stopped": the end state was not reached) or cannot tell (acted but not confirmed). "stopped" or "stuck" means nothing useful happened and the batch stops. Pass continue_on_fail:true on the batch to keep going anyway.
 - A tap that fails (no such label, or the screen did not change) is retried as a goal ("tap <label>") before the batch gives up. If that fails too the batch PAUSES and asks you for help instead of ending: do that one tap yourself with a batch (tap_at with a point from the screenshot, or any steps), then call continue with the session_id. The steps that were waiting run from the screen you leave, and the result continues their numbering. A batch you send meanwhile does not discard them; continue with discard:true (or release) does. With continue_on_fail:true a failed tap does not pause. Any other failed step ends the batch and lists the steps it did not run, so you can send them again. Tapping a control that is already selected (the current tab, the active filter) is done, not a failure.
 - A tap on a control that changes nothing is retried once 3 points off its centre, and the result says so.
 - tap and goal see the accessibility controls. When none has a label, or a view outside the app (Photos picker, permission sheet) covers the screen, they read the screenshot's text (OCR) instead. After every tap the screen before and after is compared, which is how a checkmark or switch is confirmed.`;

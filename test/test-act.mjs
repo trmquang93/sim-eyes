@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { actOptions, actState, decideStep, effectRecord, effectText, screenSignature, stepRecord, trustedAction } from "../act.mjs";
+import { actOptions, actState, ACT_CONFIRM_MIN, CONFIRM_QUESTION, confirmGoal, decideStep, effectRecord, effectText, screenSignature, stepRecord, trustedAction } from "../act.mjs";
 import { screenContext } from "../targets.mjs";
 
 const targets = [
@@ -161,6 +161,33 @@ assert.deepEqual(
   assert.equal("readFromScreenshot" in stepRecord({ kind: "tap", target: { label: "Next" } }, null), false);
   assert.equal(trustedAction({ confidence: 0.55, action: { kind: "swipe", direction: "up" } }, idle), false, "a swipe is not retried at the lower bar");
   assert.equal(trustedAction({ confidence: 0.9, action: null }, idle), false);
+}
+
+// A goal that ran out of steps is judged from the screen's description. A pager still on page 2 of 3 must come back
+// "not achieved" (the onboarding run that passed without reaching home), and a verdict TypeSafe is unsure of must not
+// decide anything: it stays "cannot tell" so the step is reported as unconfirmed, as before.
+{
+  const asks = [];
+  const clientSaying = (choiceLabel, confidence) => ({
+    async systemOne(req) {
+      asks.push(req);
+      return { answers: { verdict: { type: "choice", choice: choiceLabel, confidence, probabilities: {} } } };
+    },
+  });
+  const context = { title: null, page: "Page 2 of 3", texts: ["Understand Any Document Instantly"] };
+  const history = [{ action: "tap", control: "Next", onPage: "Page 1 of 3" }];
+  const base = { instruction: "go through next pages until reach home", targets, history, context };
+  const missed = await confirmGoal({ ...base, client: clientSaying("not achieved", 0.9) });
+  assert.deepEqual(missed, { verdict: "not achieved", confidence: 0.9 });
+  assert.equal(asks.length, 1, "one request");
+  assert.deepEqual(Object.keys(asks[0].questions), ["verdict"]);
+  assert.equal(asks[0].state.currentScreen.page, "Page 2 of 3", "TypeSafe is given the screen description");
+  assert.equal(asks[0].state.instruction, base.instruction);
+  assert.equal((await confirmGoal({ ...base, client: clientSaying("achieved", 0.95) })).verdict, "achieved");
+  assert.equal((await confirmGoal({ ...base, client: clientSaying("achieved", ACT_CONFIRM_MIN - 0.01) })).verdict, "cannot tell", "an unsure verdict decides nothing");
+  assert.equal((await confirmGoal({ ...base, client: clientSaying("not achieved", ACT_CONFIRM_MIN - 0.01) })).verdict, "cannot tell");
+  assert.equal((await confirmGoal({ ...base, client: clientSaying("something else", 0.99) })).verdict, "cannot tell", "an unknown label is never believed");
+  assert.match(CONFIRM_QUESTION.rules.join(" "), /earlier page/);
 }
 
 console.log("test-act: ok");
