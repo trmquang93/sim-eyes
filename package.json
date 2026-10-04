@@ -1,6 +1,6 @@
 {
   "name": "sim-eyes",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "MCP server that lets an agent look at and drive one iOS simulator, with one exclusive simulator per agent.",
   "keywords": [
     "mcp",
