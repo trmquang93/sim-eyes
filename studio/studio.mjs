@@ -307,6 +307,16 @@ export async function startStudio({ root = store.defaultRoot(), port = 4777, ope
     return { slug: t, ...test };
   });
   route("DELETE", `/api/projects/${S}/tests/${S}`, async (_req, [p, t]) => (await store.deleteTest(root, p, t), { ok: true }));
+  // Groups: move tests into a group by name (empty = out of any group). A group exists while a test is in it.
+  route("PUT", `/api/projects/${S}/groups`, async (req, [p]) => {
+    const { tests, group } = await readJsonBody(req);
+    if (!Array.isArray(tests) || !tests.length || tests.some((t) => typeof t !== "string")) throw new HttpError(400, "Pick the tests to move.");
+    try {
+      return { group: await store.setGroup(root, p, tests, group) };
+    } catch (err) {
+      throw /No such test/.test(err.message) ? new HttpError(404, err.message) : err;
+    }
+  });
   route("POST", `/api/projects/${S}/tests/${S}/run`, async (_req, [p, t]) => {
     const { runId, stamp } = await startRun(p, t);
     return { runId, stamp };
@@ -469,7 +479,7 @@ export async function startStudio({ root = store.defaultRoot(), port = 4777, ope
 
       if (req.method === "GET") {
         const name = path === "/" ? "index.html" : path.slice(1);
-        if (["index.html", "app.js", "style.css"].includes(name)) return await serveFile(req, res, join(PUBLIC_DIR, name));
+        if (["index.html", "app.js", "groups.js", "style.css"].includes(name)) return await serveFile(req, res, join(PUBLIC_DIR, name));
       }
       throw new HttpError(404, "Not found.");
     } catch (err) {

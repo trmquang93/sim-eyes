@@ -147,3 +147,16 @@ video { width: 100%; max-width: 360px; border-radius: var(--radius); background:
 .suite-row.skipped td, .suite-row.not-run td { color: var(--muted); }
 .inline.form { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
 .inline.form .field.grow { flex: 1; min-width: 160px; }
+
+/* groups in the test list */
+.group { margin: 0 0 12px; }
+.group .group { margin: 10px 0 0 18px; }
+.group > summary { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 6px 2px; list-style: none; }
+.group > summary::-webkit-details-marker { display: none; }
+.group > summary::before { content: "▾"; color: var(--muted); width: 12px; }
+.group:not([open]) > summary::before { content: "▸"; }
+.group-name { font-weight: 650; }
+.group > summary .run-group { margin-left: auto; font-size: 13px; }
+.ungrouped { font-size: 14px; color: var(--muted); margin: 16px 0 6px; font-weight: 600; }
+.move-bar { margin-top: 8px; }
+.move-bar input[type=text] { flex: 1; min-width: 220px; }
