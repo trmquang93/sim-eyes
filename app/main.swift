@@ -294,10 +294,14 @@ final class Studio: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationD
 
   func stop() {
     log("stop() called by app\n")
-    stdinPipe?.fileHandleForWriting.closeFile()
-    child?.terminate()
-    child?.waitUntilExit()
+    // Detach first: waitUntilExit runs the main queue, and the exit handler must not take our own SIGTERM for a crash
+    // (no "Studio stopped" alert, no marking the bundle bad, no restart while quitting).
+    let proc = child
     child = nil
+    stdinPipe?.fileHandleForWriting.closeFile()
+    stdinPipe = nil
+    proc?.terminate()
+    proc?.waitUntilExit()
   }
 
   func activeRun() -> Bool {
