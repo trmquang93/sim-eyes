@@ -11,6 +11,8 @@ export const ACT_LEAD_MIN = 0.5;
 export const ACT_LEAD_RATIO = 1 / 3;
 /** At or above this, the instruction counts as fulfilled. */
 export const ACT_DONE_MIN = 0.7;
+/** At or above this, the final confirmation's "achieved" or "not achieved" is believed; below it the goal stays unconfirmed. */
+export const ACT_CONFIRM_MIN = 0.7;
 export const ACT_DEFAULT_STEPS = 5;
 /** A goal that spans a whole stretch of a flow needs room: the loop stops early once the screen confirms it. */
 export const ACT_MAX_STEPS = 25;
@@ -153,6 +155,18 @@ export const DONE_QUESTION = {
   ],
 };
 
+export const CONFIRM_QUESTION = {
+  task: "An agent drove an iOS app to carry out `instruction` and stopped acting. Read the screen as described in `currentScreen`, `controls` and `hierarchy`, and judge whether `instruction` was achieved.",
+  evidence: EVIDENCE,
+  rules: [
+    "Judge the end state `instruction` names, not whether steps were taken: taking steps in `stepsTaken` does not by itself achieve it.",
+    "\"achieved\": the screen shows the end state the instruction names (its title, texts or controls), or a last step in `stepsTaken` that tapped the item the instruction names has an `effect` that shows the change (a checkmark or switch that cannot be read from the controls shows up as `changedAtControl` true).",
+    "\"not achieved\": the screen shows something other than the end state. For example the instruction names a destination, the last page of a pager or a finished flow, and the screen is an earlier page (`currentScreen.page` is before the last one), still shows the first screen of the flow, or a dialog (`currentScreen.alert`) is covering the app.",
+    "\"cannot tell\": the end state is the kind of change the controls and texts never show (a checkmark, a switch) and no step in `stepsTaken` has an `effect` that settles it.",
+    "Prefer \"not achieved\" over \"cannot tell\" whenever the screen visibly differs from the end state.",
+  ],
+};
+
 export const NEXT_QUESTION = {
   task: "An agent is driving an iOS app to carry out `instruction`, which is not fulfilled yet. Pick the single next action that moves the app toward it.",
   evidence: EVIDENCE,
@@ -229,4 +243,24 @@ export function typesafeClient() {
     );
   }
   return new TypeSafeClient({ apiKey });
+}
+
+export const CONFIRM_CRITERIA = {
+  achieved: "The screen shows the end state the instruction names.",
+  "not achieved": "The screen shows something other than the end state the instruction names.",
+  "cannot tell": "The end state is a change the controls and texts of this screen never show.",
+};
+
+/**
+ * The last word on a goal that ran out of steps or of confidence: the screen is described to TypeSafe (the same state
+ * `decideStep` sees) and it says whether the instruction was achieved. A verdict below ACT_CONFIRM_MIN is "cannot tell".
+ */
+export async function confirmGoal({ instruction, text, targets, history, client, screen, context, nodes }) {
+  const response = await client.systemOne({
+    state: actState({ instruction, text, targets, history, screen, context, nodes }),
+    questions: { verdict: choice(CONFIRM_QUESTION, CONFIRM_CRITERIA) },
+  });
+  const { choice: verdict, confidence } = response.answers.verdict;
+  const believed = confidence >= ACT_CONFIRM_MIN && verdict in CONFIRM_CRITERIA;
+  return { verdict: believed ? verdict : "cannot tell", confidence };
 }
