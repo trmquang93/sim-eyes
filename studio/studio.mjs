@@ -18,6 +18,7 @@ import { Refusal, addBuild, buildAppPath, cleanUploads, installBuild, listBuilds
 import { checkFile } from "./file-facts.mjs";
 import { applyFixtures } from "./fixtures.mjs";
 import { judgeCheckpoint } from "./judge.mjs";
+import { applyJudgeChange, describeJudge, judgeEnv, readSettings, settingsPath, writeSettings } from "./settings.mjs";
 import { openSimEyes } from "./mcp-client.mjs";
 import { studioClient, mapLines } from "./map-line.mjs";
 import { runTest } from "./run-test.mjs";
@@ -141,8 +142,13 @@ const fieldsOf = (input) => {
   }
 };
 
-export async function startStudio({ root = store.defaultRoot(), port = 4777, openBrowser = false, openSim = openSimEyes, exec = realExec, mapClient = studioClient, judge = defaultJudge(), ledgerPath, devicesRoot, fileDeps = {} } = {}) {
+export async function startStudio({ root = store.defaultRoot(), port = 4777, openBrowser = false, openSim = openSimEyes, exec = realExec, mapClient = studioClient, judge: baseJudge = defaultJudge(), env = process.env, ledgerPath, devicesRoot, fileDeps = {} } = {}) {
   await mkdir(root, { recursive: true });
+  // The judge follows the Settings page: "env" keeps what the environment gave (`baseJudge`), any other choice builds a new one.
+  const settingsFile = settingsPath(root);
+  let settings = await readSettings(settingsFile);
+  const judgeFor = (j) => (j.source === "env" ? baseJudge : defaultJudge(judgeEnv(env, j)));
+  let judge = judgeFor(settings.judge);
   const runs = new Map(); // runId -> { events, clients, done }
   let active = null;
   let activeSuite = null;
@@ -279,6 +285,20 @@ export async function startStudio({ root = store.defaultRoot(), port = 4777, ope
   const S = "([^/]+)";
 
   route("GET", "/api/status", async () => ({ typesafe: Boolean(process.env.TYPESAFE_API_KEY), mapper: Boolean(mapClient()), root, activeRun: active, activeSuite, judge: judge?.info ?? null, bundleVersion: await codeVersion() }));
+  route("GET", "/api/settings", async () => ({ judge: describeJudge(env, settings.judge), active: judge?.info ?? null }));
+  route("PUT", "/api/settings/judge", async (req) => {
+    let next;
+    try {
+      next = applyJudgeChange(settings.judge, await readJsonBody(req), env);
+    } catch (err) {
+      if (err instanceof HttpError) throw err;
+      throw new HttpError(400, err.message);
+    }
+    await writeSettings(settingsFile, { ...settings, judge: next });
+    settings = { ...settings, judge: next };
+    judge = judgeFor(next);
+    return { judge: describeJudge(env, next), active: judge?.info ?? null };
+  });
   route("GET", "/api/projects", async () => store.listProjects(root));
   route("POST", "/api/projects", async (req) => {
     const { name, app } = await readJsonBody(req);

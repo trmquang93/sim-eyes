@@ -274,7 +274,7 @@ async function projectView(ctx, slug) {
   mount(ctx, [["Projects", "#/"], [project.name, `#/p/${slug}`]],
     h("h1", {}, project.name),
     h("p", { class: "sub" }, project.app ? `App: ${project.app}` : "No app yet: add a build and its bundle id is filled in."),
-    status.judge ? null : h("p", { class: "notice", id: "no-judge" }, "No judge is set up, so checkpoints are saved as \"unsure\" and you decide every result. To get suggestions, start Studio with OPENROUTER_API_KEY set. See the README."),
+    status.judge ? null : h("p", { class: "notice", id: "no-judge" }, "No judge is set up, so checkpoints are saved as \"unsure\" and you decide every result. To get suggestions, ", h("a", { href: "#/settings" }, "set up the judge in Settings"), "."),
     h("div", { class: "steps-head" }, h("h2", {}, "Tests"), h("a", { class: "link", href: `#/p/${slug}/fixtures` }, "Fixtures (photos and files)")),
     testsPanel(ctx, slug, tests, suites),
     h("div", { class: "panel", style: "margin-top:12px" }, newTest, testMsg),
@@ -522,7 +522,7 @@ async function editorView(ctx, slug, testSlug) {
       h("div", { class: "field" }, h("span", {}, "Fixtures (set up before the app starts)"),
         setNames.length ? h("div", { class: "checks" }, fixtureBoxes) : h("span", { class: "hint" }, "None defined yet. ", h("a", { href: `#/p/${slug}/fixtures` }, "Add photos or files"), ".")),
       h("div", { class: "inline form" }, h("label", { class: "field" }, "Start", start)), startHelp),
-    status.judge ? null : h("p", { class: "notice" }, "No judge is set up: checkpoints (Check lines) are saved as \"unsure\" and you decide every result."),
+    status.judge ? null : h("p", { class: "notice" }, "No judge is set up: checkpoints (Check lines) are saved as \"unsure\" and you decide every result. ", h("a", { href: "#/settings" }, "Set it up in Settings"), "."),
     h("div", { class: "editor" },
       h("div", {}, h("div", { class: "hint", style: "margin-bottom:6px" }, "One step per line. Start a line with # for a note."), text,
         h("details", { style: "margin-top:8px" }, h("summary", { class: "hint" }, "Phrases that run exactly"),
@@ -836,8 +836,45 @@ async function fixturesView(ctx, slug) {
   drawSets();
 }
 
+// ---- settings: the judge ---------------------------------------------------------------------------------------
+async function settingsView(ctx, saved) {
+  const { judge, active } = await api("GET", "/api/settings");
+  const msg = h("div");
+  const key = h("input", { type: "password", id: "judge-key", autocomplete: "off", placeholder: judge.keySaved ? `Saved key ending ${judge.keyHint}. Paste a new one to replace it.` : "sk-or-..." });
+  const choices = [
+    ["env", "Use how Studio was started", judge.envKey ? "An OpenRouter key is in the environment." : judge.hubAvailable ? "Environment only: no judge unless it asks for the hub." : "Environment only: no key there, so there is no judge."],
+    ["hub", "Use the hub", judge.hubAvailable ? "Your invite key is set. The hub holds the OpenRouter key." : "Not available: this Mac has no invite key or hub address."],
+    ["openrouter", "Use my OpenRouter key", "Calls OpenRouter directly. The key is saved on this Mac only, readable by you."],
+    ["off", "No judge", "Every checkpoint is saved as \"unsure\" and you decide each result."],
+  ];
+  const radios = choices.map(([value, label, help]) => ({ value, input: h("input", { type: "radio", name: "judge-source", value, checked: judge.source === value, disabled: value === "hub" && !judge.hubAvailable }), label, help }));
+  const form = h("form", { onsubmit: async (e) => {
+    e.preventDefault();
+    const source = radios.find((r) => r.input.checked)?.value ?? judge.source;
+    try {
+      await api("PUT", "/api/settings/judge", { source, openrouterKey: key.value });
+      await settingsView(ctx, "Saved. The next run uses it.");
+    } catch (err) { msg.replaceChildren(fail(err)); }
+  } },
+    radios.map((r) => h("label", { class: "choice" }, r.input, h("span", {}, h("strong", {}, r.label), h("span", { class: "hint", style: "display:block" }, r.help)))),
+    h("label", { class: "field" }, "OpenRouter API key", key),
+    h("div", { style: "display:flex;gap:8px;margin-top:10px" },
+      h("button", { class: "primary", type: "submit" }, "Save"),
+      judge.keySaved ? h("button", { type: "button", onclick: async () => {
+        try { await api("PUT", "/api/settings/judge", { source: judge.source === "openrouter" ? "env" : judge.source, clearKey: true }); await settingsView(ctx, "The saved key is gone."); } catch (err) { msg.replaceChildren(fail(err)); }
+      } }, "Forget saved key") : null));
+  mount(ctx, [["Projects", "#/"], ["Settings", "#/settings"]],
+    h("h1", {}, "Settings"),
+    h("h2", {}, "Judge"),
+    h("p", { class: "sub" }, "The judge looks at the screenshot at each Check line and suggests pass or fail. You still decide every result."),
+    h("p", { class: "notice " + (active ? "good" : "") , id: "judge-now" }, active ? `On now: ${active.model} (${active.backend}).` : "Off now: checkpoints are saved as \"unsure\"."),
+    saved ? h("p", { class: "notice good", id: "judge-saved" }, saved) : null,
+    h("div", { class: "panel" }, form, msg));
+}
+
 // ---- router ------------------------------------------------------------------------------------------------------
 const routes = [
+  [/^#\/settings$/, settingsView],
   [/^#\/p\/([^/]+)\/t\/([^/]+)\/run\/([^/]+)$/, runView],
   [/^#\/p\/([^/]+)\/t\/([^/]+)$/, editorView],
   [/^#\/p\/([^/]+)\/suite\/([^/]+)$/, suiteView],
