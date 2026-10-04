@@ -1,4 +1,6 @@
 // sim-eyes Studio page: plain JS, no framework. Text is always set as text (never as HTML).
+import { all as testsUnder, buildTree, groupPaths, normalizeGroup } from "/groups.js";
+
 const appEl = document.getElementById("app");
 const crumbsEl = document.getElementById("crumbs");
 
@@ -142,20 +144,19 @@ async function projectsView(ctx) {
 }
 
 // ---- project: tests, suites and builds -------------------------------------------------------------------------
-const topGroup = (g) => String(g ?? "").split(" / ")[0];
-
 /** The test list with filters, checkboxes and "Run selected / Run this group". */
 function testsPanel(ctx, slug, tests, suites) {
   const filter = { text: "", group: "", priority: "", skipped: "all" };
   const picked = new Set();
   const out = h("div");
+  const notice = h("div");
   const listBox = h("div");
   const bar = h("div", { class: "panel run-bar" });
-  const groups = [...new Set(tests.flatMap((t) => (t.group ? [t.group, topGroup(t.group)] : [])))].sort((a, b) => a.localeCompare(b));
+  const closed = new Set(); // group paths the tester folded; kept across redraws
   const visible = () => tests.filter((t) => {
     const hay = `${t.id ?? ""} ${t.name} ${t.group ?? ""} ${t.notes ?? ""}`.toLowerCase();
     if (filter.text && !hay.includes(filter.text.toLowerCase())) return false;
-    if (filter.group && !(t.group === filter.group || String(t.group ?? "").startsWith(`${filter.group} / `))) return false;
+    if (filter.group && !(normalizeGroup(t.group) === filter.group || normalizeGroup(t.group).startsWith(`${filter.group} / `))) return false;
     if (filter.priority && t.priority !== filter.priority) return false;
     if (filter.skipped === "runnable" && t.skip) return false;
     if (filter.skipped === "skipped" && !t.skip) return false;
@@ -166,6 +167,18 @@ function testsPanel(ctx, slug, tests, suites) {
     try { const { stamp } = await api("POST", `/api/projects/${slug}/suites`, { selector }); location.hash = `#/p/${slug}/suite/${stamp}`; }
     catch (err) { out.replaceChildren(fail(err)); button.disabled = false; }
   };
+  const moveTo = { value: "" };
+  const move = async (button) => {
+    button.disabled = true;
+    try {
+      const { group } = await api("PUT", `/api/projects/${slug}/groups`, { tests: [...picked], group: moveTo.value });
+      for (const t of tests) if (picked.has(t.slug)) t.group = group;
+      picked.clear();
+      moveTo.value = "";
+      refillGroups();
+      refresh();
+    } catch (err) { notice.replaceChildren(fail(err)); button.disabled = false; }
+  };
   const drawBar = () => {
     const shown = visible();
     const runnable = shown.filter((t) => !t.skip && t.lineCount);
@@ -173,26 +186,58 @@ function testsPanel(ctx, slug, tests, suites) {
     const runSelected = h("button", { class: "primary", type: "button", id: "run-selected", disabled: picked.size === 0, onclick: (e) => start({ tests: [...picked] }, e.target) }, `Run selected (${picked.size})`);
     const runGroup = byFilter ? h("button", { type: "button", id: "run-group", disabled: runnable.length === 0, onclick: (e) => start({ ...(filter.group ? { group: filter.group } : {}), ...(filter.priority ? { priority: filter.priority } : {}) }, e.target) }, `Run these ${shown.length} (${shown.length - runnable.length} skipped)`) : null;
     fill(bar, h("div", { class: "inline form" }, runSelected, runGroup,
-      h("span", { class: "muted small" }, `${shown.length} of ${tests.length} shown · tests run one after another on one simulator`)));
+      h("span", { class: "muted small" }, `${shown.length} of ${tests.length} shown · tests run one after another on one simulator`)),
+      h("div", { class: "inline form move-bar" },
+        h("input", { type: "text", id: "move-group", list: "move-group-options", placeholder: "Group name (empty = no group), like Image to PDF / Delete page", "aria-label": "Group to move the selected tests into", value: moveTo.value, oninput: (e) => (moveTo.value = e.target.value) }),
+        h("datalist", { id: "move-group-options" }, groupPaths(tests).map((g) => h("option", { value: g }))),
+        h("button", { type: "button", id: "move-selected", disabled: picked.size === 0, onclick: (e) => move(e.target) }, `Move selected (${picked.size}) to group`)));
+  };
+  const testRow = (t) => h("div", { class: `row ${t.skip ? "skipped" : ""}` },
+    h("input", { type: "checkbox", class: "pick", "aria-label": `Select ${t.name}`, checked: picked.has(t.slug), onchange: (e) => { e.target.checked ? picked.add(t.slug) : picked.delete(t.slug); drawList(); } }),
+    h("div", { class: "grow" },
+      h("div", { class: "title-line" }, t.id ? h("span", { class: "case-id" }, t.id) : null, h("a", { class: "title", href: `#/p/${slug}/t/${t.slug}` }, t.name), t.priority ? badge(t.priority, PRIORITY_KIND[t.priority]) : null, skipBadge(t.skip)),
+      h("div", { class: "muted small" }, [t.group, `${t.lineCount} lines · start: ${t.start}`, t.fixtures?.length ? `fixtures: ${t.fixtures.join(", ")}` : null].filter(Boolean).join(" · "))),
+    h("span", { class: "muted small" }, when(t.savedAt)));
+  /** One group: a fold with its tests, its subgroups, a box that ticks all of it and a button that runs all of it. */
+  const groupBox = (node) => {
+    const inside = testsUnder(node);
+    const everyPicked = inside.every((t) => picked.has(t.slug));
+    const runnable = inside.filter((t) => !t.skip && t.lineCount).length;
+    const box = h("details", { class: "group", "data-group": node.path, open: !closed.has(node.path) },
+      h("summary", {},
+        h("input", { type: "checkbox", class: "pick pick-group", "aria-label": `Select every test in ${node.path}`, checked: everyPicked, onclick: (e) => e.stopPropagation(), onchange: (e) => { inside.forEach((t) => (e.target.checked ? picked.add(t.slug) : picked.delete(t.slug))); drawList(); } }),
+        h("span", { class: "group-name" }, node.name), h("span", { class: "muted small" }, ` ${inside.length} ${inside.length === 1 ? "test" : "tests"}${runnable < inside.length ? ` · ${inside.length - runnable} skipped` : ""}`),
+        h("button", { type: "button", class: "link run-group", disabled: runnable === 0, onclick: (e) => { e.preventDefault(); start({ tests: inside.map((t) => t.slug) }, e.target); } }, `Run group (${runnable})`)),
+      node.tests.length ? h("div", { class: "card" }, node.tests.map(testRow)) : null,
+      node.groups.map(groupBox));
+    box.addEventListener("toggle", () => (box.open ? closed.delete(node.path) : closed.add(node.path)));
+    return box;
   };
   const drawList = () => {
     const shown = visible();
     for (const id of [...picked]) if (!tests.some((t) => t.slug === id)) picked.delete(id);
+    const tree = buildTree(shown);
+    const grouped = tree.groups.length > 0;
     fill(listBox, shown.length
-      ? h("div", { class: "card" }, shown.map((t) => h("div", { class: `row ${t.skip ? "skipped" : ""}` },
-          h("input", { type: "checkbox", class: "pick", "aria-label": `Select ${t.name}`, checked: picked.has(t.slug), onchange: (e) => { e.target.checked ? picked.add(t.slug) : picked.delete(t.slug); drawBar(); } }),
-          h("div", { class: "grow" },
-            h("div", { class: "title-line" }, t.id ? h("span", { class: "case-id" }, t.id) : null, h("a", { class: "title", href: `#/p/${slug}/t/${t.slug}` }, t.name), t.priority ? badge(t.priority, PRIORITY_KIND[t.priority]) : null, skipBadge(t.skip)),
-            h("div", { class: "muted small" }, [t.group, `${t.lineCount} lines · start: ${t.start}`, t.fixtures?.length ? `fixtures: ${t.fixtures.join(", ")}` : null].filter(Boolean).join(" · "))),
-          h("span", { class: "muted small" }, when(t.savedAt)))))
+      ? grouped
+        ? [tree.groups.map(groupBox), tree.tests.length ? [h("h3", { class: "ungrouped" }, "Not in a group"), h("div", { class: "card" }, tree.tests.map(testRow))] : null]
+        : h("div", { class: "card" }, shown.map(testRow))
       : h("p", { class: "muted" }, tests.length ? "No test matches these filters." : "No tests yet."));
     drawBar();
   };
   const refresh = () => drawList();
   const select = (label, key, options) => h("label", { class: "field" }, label, h("select", { "aria-label": label, onchange: (e) => { filter[key] = e.target.value; refresh(); } }, options.map(([v, text]) => h("option", { value: v }, text))));
+  const groupOptions = () => [["", "All groups"], ...groupPaths(tests).map((g) => [g, g])].map(([v, text]) => h("option", { value: v }, text));
+  const groupSelect = h("label", { class: "field" }, "Group", h("select", { id: "filter-group", "aria-label": "Group", onchange: (e) => { filter.group = e.target.value; refresh(); } }, groupOptions()));
+  const refillGroups = () => {
+    const sel = groupSelect.querySelector("select");
+    if (!groupPaths(tests).includes(filter.group)) filter.group = "";
+    sel.replaceChildren(...groupOptions());
+    sel.value = filter.group;
+  };
   const filters = tests.length > 1 ? h("div", { class: "inline form filters" },
     h("label", { class: "field" }, "Search", h("input", { type: "search", placeholder: "ID, title, notes", oninput: (e) => { filter.text = e.target.value; refresh(); } })),
-    groups.length ? select("Group", "group", [["", "All groups"], ...groups.map((g) => [g, g])]) : null,
+    groupSelect,
     select("Priority", "priority", [["", "Any"], ["P0", "P0"], ["P1", "P1"], ["P2", "P2"], ["P3", "P3"]]),
     select("Runnable", "skipped", [["all", "All"], ["runnable", "Runnable only"], ["skipped", "Skipped only"]]),
     h("button", { type: "button", class: "link", onclick: () => { const all = visible().filter((t) => !t.skip); const every = all.every((t) => picked.has(t.slug)); all.forEach((t) => (every ? picked.delete(t.slug) : picked.add(t.slug))); drawList(); } }, "Tick / untick runnable shown")) : null;
@@ -203,7 +248,7 @@ function testsPanel(ctx, slug, tests, suites) {
           statusBadge(s.status)))))
     : null;
   drawList();
-  fill(out, filters, bar, listBox, history);
+  fill(out, filters, bar, notice, listBox, history);
   return out;
 }
 

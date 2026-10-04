@@ -99,6 +99,8 @@ export async function readTest(root, project, test) {
 export const PRIORITIES = ["P0", "P1", "P2", "P3"];
 export const SKIP_REASONS = ["camera", "low-end", "network", "proxy", "dev-error", "date", "computer", "share-sheet", "gesture", "other"];
 const clip = (value, max) => String(value ?? "").trim().slice(0, max);
+/** A group is a path of names: "A/B" and " A /  B" are both stored as "A / B", so one group is never two. */
+const groupPath = (value) => clip(String(value ?? "").split("/").map((p) => p.trim()).filter(Boolean).join(" / "), 120);
 
 /**
  * The case fields of a test as stored: only known keys, trimmed, in a fixed shape. Throws for a priority or a skip reason
@@ -114,7 +116,7 @@ export function caseFields(input = {}) {
     skip = { reason, note: clip(input.skip.note, 500) };
   }
   const fixtures = Array.isArray(input.fixtures) ? [...new Set(input.fixtures.map((f) => clip(f, 60)).filter(Boolean))] : [];
-  return { id: clip(input.id, 40), group: clip(input.group, 120), priority, notes: clip(input.notes, 2000), fixtures, skip };
+  return { id: clip(input.id, 40), group: groupPath(input.group), priority, notes: clip(input.notes, 2000), fixtures, skip };
 }
 
 const sameId = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
@@ -127,6 +129,17 @@ export async function writeTest(root, project, test, data) {
     if (other) throw new Error(`The ID ${id} is already used by "${other.name}".`);
   }
   await writeJson(testPath(root, project, test), data);
+}
+
+/** Moves tests into a group (an empty group takes them out of any). Checks every test exists before changing one. */
+export async function setGroup(root, project, tests, group) {
+  const next = groupPath(group);
+  const current = await Promise.all(tests.map((t) => readTest(root, project, t).catch(() => Promise.reject(new Error(`No such test: ${t}.`)))));
+  for (const test of current) {
+    const { slug: s, ...data } = test;
+    await writeTest(root, project, s, { ...data, group: next });
+  }
+  return next;
 }
 
 export async function deleteTest(root, project, test) {

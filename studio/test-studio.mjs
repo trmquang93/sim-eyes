@@ -75,6 +75,15 @@ try {
   await call("DELETE", "/api/projects/settings-qa/tests/third");
   await call("PUT", "/api/projects/settings-qa/tests/open-about", { name: "Open About", start: "relaunch", lines: ['Tap "General"', "open the About page", "# note", "Check the iOS version is shown"], fixtures: [] });
 
+  // Move ticked tests into a group: it keeps their lines, rejects an empty pick, and says 404 for a test that is not there.
+  const moved = await call("PUT", "/api/projects/settings-qa/groups", { tests: ["open-about"], group: "Settings/ General " });
+  assert.equal(moved.data.group, "Settings / General");
+  const after = (await call("GET", "/api/projects/settings-qa/tests/open-about")).data;
+  assert.deepEqual([after.group, after.lines.length], ["Settings / General", 4], "only the group changed");
+  assert.equal((await call("PUT", "/api/projects/settings-qa/groups", { tests: [], group: "X" })).status, 400);
+  assert.equal((await call("PUT", "/api/projects/settings-qa/groups", { tests: ["nope"], group: "X" })).status, 404);
+  assert.match((await fetch(`${studio.url}/groups.js`).then((r) => r.text())), /buildTree/, "the page can load its grouping module");
+
   // One run at a time: a second Run is refused while one is open.
   let release;
   gate = new Promise((r) => (release = r));

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { caseFields, createProject, deleteRun, listProjects, listRuns, listSuites, listTests, newRunDir, newSuiteDir, readFixtureSets, readRun, readSuite, readTest, resolveInProject, setVerdict, slug, updateProject, writeFixtureSets, writeRun, writeSuite, writeTest } from "./store.mjs";
+import { caseFields, createProject, deleteRun, listProjects, listRuns, listSuites, listTests, newRunDir, newSuiteDir, readFixtureSets, readRun, readSuite, readTest, resolveInProject, setVerdict, slug, updateProject, setGroup, writeFixtureSets, writeRun, writeSuite, writeTest } from "./store.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "studio-store-"));
 try {
@@ -32,11 +32,20 @@ try {
     assert.equal(listed.priority, "P0");
     assert.deepEqual(listed.skip, fields.skip);
     assert.deepEqual(caseFields({}), { id: "", group: "", priority: "", notes: "", fixtures: [], skip: null }, "a test with no case fields is valid");
+    assert.equal(caseFields({ group: " Image to PDF/Xóa trang " }).group, "Image to PDF / Xóa trang", "one group however it was typed");
     assert.throws(() => caseFields({ priority: "P9" }), /priority must be one of/);
     assert.throws(() => caseFields({ skip: { reason: "cmaera" } }), /skip reason must be one of/);
     // A report is made against the ID, so two tests may not share one, even in another letter case; saving a test again keeps its own ID.
     await assert.rejects(writeTest(root, "pdf-tools", "other", { name: "Other", start: "fresh", lines: [], id: "tc-img-032" }), /already used by "Delete a page"/);
     await writeTest(root, "pdf-tools", "delete-a-page", { name: "Delete a page", start: "fresh", lines: [], ...fields, notes: "edited" });
+
+    // Moving tests into a group changes only their group; a missing test stops the move before it changes any.
+    assert.equal(await setGroup(root, "pdf-tools", ["delete-a-page", "create-a-folder"], " Files/ Move "), "Files / Move");
+    assert.deepEqual((await listTests(root, "pdf-tools")).map((x) => [x.slug, x.group, x.id]).sort(), [["create-a-folder", "Files / Move", undefined], ["delete-a-page", "Files / Move", "TC-IMG-032"]]);
+    await assert.rejects(setGroup(root, "pdf-tools", ["create-a-folder", "nope"], "Other"), /No such test: nope/);
+    assert.equal((await readTest(root, "pdf-tools", "create-a-folder")).group, "Files / Move", "nothing moved when one test was missing");
+    assert.equal(await setGroup(root, "pdf-tools", ["create-a-folder"], ""), "", "an empty group takes a test out of its group");
+    await setGroup(root, "pdf-tools", ["delete-a-page"], fields.group);
   }
 
   // The reviewer's verdict overrides the suggestion, and the run keeps both.
