@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { JUDGE_MODEL, JudgeError, decisionsBody, judgeClient, judgeConfig } from "./judge-client.mjs";
+import { JUDGE_MODEL, JudgeError, RATE_LIMIT_RETRIES, decisionsBody, judgeClient, judgeConfig, retryDelayMs } from "./judge-client.mjs";
 
 // Where the judge is. Without a setting there is none, and the verdict is "unsure": nothing is guessed.
 assert.equal(judgeConfig({}), null);
@@ -68,5 +68,29 @@ const okFetch = async (url, init) => (seen.push({ url, init, body: JSON.parse(in
   await assert.rejects(call(async () => reply(200, { model: "x" })), /without answers/);
   const hub = judgeClient({ env: hubEnv, fetch: () => Promise.reject(new TypeError("down")) });
   await assert.rejects(hub.systemOne({ state: "s", questions: { q: {} } }), /unreachable through the hub/);
+}
+
+// Several runs judged at once can hit the rate limit: a 429 is asked again after a pause, so the checkpoint is not left "unsure" for a burst.
+{
+  const env = { OPENROUTER_API_KEY: "k" };
+  const limited = (retryAfter) => new Response(JSON.stringify({ error: { message: "Request rate limit exceeded" } }), { status: 429, headers: retryAfter ? { "retry-after": retryAfter } : {} });
+  const good = () => reply(200, { answers: { matches: { type: "noul", noul: 0.9 } } });
+  const run = (replies) => {
+    const waits = [];
+    let calls = 0;
+    const client = judgeClient({ env, fetch: async () => replies[calls++](), sleep: async (ms) => void waits.push(ms) });
+    return { waits, calls: () => calls, out: client.systemOne({ state: "s", questions: { matches: {} } }) };
+  };
+  const recovered = run([() => limited("3"), () => limited(), good]);
+  assert.equal((await recovered.out).answers.matches.noul, 0.9, "the answer after the pauses is used");
+  assert.deepEqual(recovered.waits, [3000, 4000], "Retry-After when sent, else doubling from 2 s (second try: 2 s * 2)");
+  const stuck = run(Array.from({ length: RATE_LIMIT_RETRIES + 1 }, () => () => limited()));
+  await assert.rejects(stuck.out, (err) => err.status === 429 && /answered 429/.test(err.message));
+  assert.equal(stuck.calls(), RATE_LIMIT_RETRIES + 1, "a judge that keeps refusing is asked a bounded number of times");
+  const denied = run([() => reply(401, { error: { message: "No auth" } }), good]);
+  await assert.rejects(denied.out, /answered 401/);
+  assert.equal(denied.calls(), 1, "only a rate limit is asked again: another error would repeat");
+  assert.equal(retryDelayMs("90", 0), 20_000, "a long Retry-After is capped so a suite is not held for minutes");
+  assert.equal(retryDelayMs("junk", 1), 4000);
 }
 console.log("test-judge-client: ok");

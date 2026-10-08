@@ -138,7 +138,8 @@ async function projectsView(ctx) {
     h("p", { class: "sub" }, "A project is one app and its test cases."),
     projects.length
       ? h("div", { class: "card" }, projects.map((p) => h("div", { class: "row" },
-          h("div", { class: "grow" }, h("a", { class: "title", href: `#/p/${p.slug}` }, p.name), h("div", { class: "muted small" }, p.app || "no app yet")))))
+          h("div", { class: "grow" }, h("a", { class: "title", href: `#/p/${p.slug}` }, p.name), h("div", { class: "muted small" }, p.app || "no app yet")),
+          confirmButton("Delete", "Delete project and all its tests and runs? Click again", async () => { await api("DELETE", `/api/projects/${p.slug}`); ctx.dead || projectsView(ctx); }))))
       : h("p", { class: "muted" }, "No projects yet."),
     h("h2", {}, "New project"), h("div", { class: "panel" }, form, msg));
 }
@@ -147,6 +148,7 @@ async function projectsView(ctx) {
 /** The test list with filters, checkboxes and "Run selected / Run this group". */
 function testsPanel(ctx, slug, tests, suites) {
   const filter = { text: "", group: "", priority: "", skipped: "all" };
+  const width = { value: 1 }; // tests run at once; each takes a simulator of its own
   const picked = new Set();
   const out = h("div");
   const notice = h("div");
@@ -164,7 +166,7 @@ function testsPanel(ctx, slug, tests, suites) {
   });
   const start = async (selector, button) => {
     button.disabled = true;
-    try { const { stamp } = await api("POST", `/api/projects/${slug}/suites`, { selector }); location.hash = `#/p/${slug}/suite/${stamp}`; }
+    try { const { stamp } = await api("POST", `/api/projects/${slug}/suites`, { selector, concurrency: width.value }); location.hash = `#/p/${slug}/suite/${stamp}`; }
     catch (err) { out.replaceChildren(fail(err)); button.disabled = false; }
   };
   const moveTo = { value: "" };
@@ -179,18 +181,29 @@ function testsPanel(ctx, slug, tests, suites) {
       refresh();
     } catch (err) { notice.replaceChildren(fail(err)); button.disabled = false; }
   };
+  const removePicked = async () => {
+    await api("DELETE", `/api/projects/${slug}/tests`, { tests: [...picked] });
+    for (let i = tests.length - 1; i >= 0; i -= 1) if (picked.has(tests[i].slug)) tests.splice(i, 1);
+    picked.clear();
+    refillGroups();
+    refresh();
+  };
   const drawBar = () => {
     const shown = visible();
     const runnable = shown.filter((t) => !t.skip && t.lineCount);
     const byFilter = filter.group || filter.priority;
     const runSelected = h("button", { class: "primary", type: "button", id: "run-selected", disabled: picked.size === 0, onclick: (e) => start({ tests: [...picked] }, e.target) }, `Run selected (${picked.size})`);
     const runGroup = byFilter ? h("button", { type: "button", id: "run-group", disabled: runnable.length === 0, onclick: (e) => start({ ...(filter.group ? { group: filter.group } : {}), ...(filter.priority ? { priority: filter.priority } : {}) }, e.target) }, `Run these ${shown.length} (${shown.length - runnable.length} skipped)`) : null;
-    fill(bar, h("div", { class: "inline form" }, runSelected, runGroup,
-      h("span", { class: "muted small" }, `${shown.length} of ${tests.length} shown · tests run one after another on one simulator`)),
+    const atOnce = h("label", { class: "field" }, "At a time",
+      h("select", { id: "run-width", "aria-label": "Tests to run at the same time", onchange: (e) => (width.value = Number(e.target.value)) },
+        [1, 2, 3, 4, 5, 6].map((n) => h("option", { value: n, selected: n === width.value }, String(n)))));
+    fill(bar, h("div", { class: "inline form" }, runSelected, runGroup, atOnce,
+      h("span", { class: "muted small" }, `${shown.length} of ${tests.length} shown · ${width.value === 1 ? "tests run one after another on one simulator" : `up to ${width.value} tests at once, each on its own simulator (fewer if the pool has fewer free)`}`)),
       h("div", { class: "inline form move-bar" },
         h("input", { type: "text", id: "move-group", list: "move-group-options", placeholder: "Group name (empty = no group), like Image to PDF / Delete page", "aria-label": "Group to move the selected tests into", value: moveTo.value, oninput: (e) => (moveTo.value = e.target.value) }),
         h("datalist", { id: "move-group-options" }, groupPaths(tests).map((g) => h("option", { value: g }))),
-        h("button", { type: "button", id: "move-selected", disabled: picked.size === 0, onclick: (e) => move(e.target) }, `Move selected (${picked.size}) to group`)));
+        h("button", { type: "button", id: "move-selected", disabled: picked.size === 0, onclick: (e) => move(e.target) }, `Move selected (${picked.size}) to group`),
+        picked.size ? confirmButton(`Delete selected (${picked.size})`, `Delete ${picked.size} ${picked.size === 1 ? "test" : "tests"}? Click again`, removePicked) : h("button", { type: "button", id: "delete-selected", class: "danger", disabled: true }, "Delete selected (0)")));
   };
   const testRow = (t) => h("div", { class: `row ${t.skip ? "skipped" : ""}` },
     h("input", { type: "checkbox", class: "pick", "aria-label": `Select ${t.name}`, checked: picked.has(t.slug), onchange: (e) => { e.target.checked ? picked.add(t.slug) : picked.delete(t.slug); drawList(); } }),
@@ -618,7 +631,7 @@ async function runView(ctx, slug, testSlug, stamp) {
     if (!c) return null;
     return h("div", { class: "suggestion", "data-suggested": c.suggested },
       suggestionBadge(c.suggested, c.p), " ",
-      h("span", { class: "hint" }, c.source === "code" ? `Checked from the file: ${c.detail}` : c.error ? `No suggestion: ${c.error}` : c.p == null ? "" : `Suggested by the judge (${Math.round(c.p * 100)}% sure the screen matches). You decide.`),
+      h("span", { class: "hint" }, c.source === "code" ? `Checked from the file: ${c.detail}` : c.error ? `No suggestion: ${c.error}` : c.p == null ? "" : `${c.via === "screen" ? "Suggested from the screen's text" : "Suggested from the screenshot"} (${Math.round(c.p * 100)}% sure the screen matches).${c.fallback ? ` The text was not enough: ${c.fallback}.` : ""} You decide.`),
       c.images?.length ? h("div", { class: "pages" }, c.images.map((f) => h("img", { src: `${base}/${f}`, alt: f, loading: "lazy", onclick: () => lightbox(`${base}/${f}`) }))) : null);
   };
 
@@ -669,7 +682,7 @@ async function runView(ctx, slug, testSlug, stamp) {
     const out = h("div");
     const suggested = run.suggestedVerdict;
     return h("div", { class: "panel verdict", id: "verdict" },
-      suggested ? h("p", { class: "suggested", id: "suggested-verdict" }, "Suggested: ", suggestionBadge(suggested), run.judge ? ` by ${run.judge.backend}${run.judge.model ? ` (${run.judge.model})` : ""}` : " (no judge was on, so every check is unsure)", ". The verdict is yours.", run.verdict && suggested !== "unsure" && run.verdict.result !== suggested ? " You chose differently; both are kept." : "") : null,
+      suggested ? h("p", { class: "suggested", id: "suggested-verdict" }, "Suggested: ", suggestionBadge(suggested), run.judge ? ` by ${run.judge.screenText ? "TypeSafe (screen text)" : run.judge.backend}${run.judge.model ? `${run.judge.screenText ? " then " : " "}(${run.judge.model})` : ""}` : " (no judge was on, so every check is unsure)", ". The verdict is yours.", run.verdict && suggested !== "unsure" && run.verdict.result !== suggested ? " You chose differently; both are kept." : "") : null,
       h("div", { class: "choices" }, pick("pass"), pick("fail")), note,
       h("div", {}, h("button", { class: "primary", type: "button", id: "save-verdict", onclick: async () => {
         const result = document.querySelector("input[name=verdict]:checked")?.value;
@@ -726,41 +739,101 @@ async function runView(ctx, slug, testSlug, stamp) {
   }
 }
 
-// ---- suite: a group of tests run one after another ---------------------------------------------------------------
+// ---- suite: a group of tests, one after another or several at once ---------------------------------------------------------------
 async function suiteView(ctx, slug, stamp) {
   let suite = await api("GET", `/api/projects/${slug}/suites/${stamp}`);
   const verdicts = new Map(); // `${test}/${runStamp}` -> verdict, read once a run is done
+  const finished = new Map(); // `${test}/${runStamp}` -> the finished run, for the final screen, video and expectations
   const body = h("div");
   const live = () => suite.status === "running";
   const SKIP_TEXT = (i) => (i.reason === "no-steps" ? "no steps yet" : i.reason === "stopped" ? "stopped" : i.reason === "pool-busy" ? "no free simulator" : SKIP_LABELS[i.reason] ?? i.reason);
   const loadVerdicts = async () => {
     await Promise.all(suite.items.filter((i) => i.runStamp && !verdicts.has(`${i.test}/${i.runStamp}`)).map(async (i) => {
       const run = await api("GET", `/api/projects/${slug}/runs/${i.test}/${i.runStamp}`).catch(() => null);
-      if (run && run.status !== "running") verdicts.set(`${i.test}/${i.runStamp}`, run.verdict ?? null);
+      if (run && run.status !== "running") { verdicts.set(`${i.test}/${i.runStamp}`, run.verdict ?? null); finished.set(`${i.test}/${i.runStamp}`, run); }
     }));
+  };
+  /** What a running test is doing now: its step and the screen that step left. */
+  const liveStep = (i) => {
+    if (i.state !== "running" || !i.live) return null;
+    const src = i.live.shot ? `/files/${slug}/runs/${i.test}/${i.live.stamp}/${i.live.shot}` : null;
+    return h("div", { class: "live-step" },
+      h("div", { class: "muted small" }, i.live.n ? `Step ${i.live.n}: ${i.live.line ?? ""}` : i.live.phase ? `Preparing (${i.live.phase})` : "Starting"),
+      src ? h("img", { src, alt: `Screen after step ${i.live.shotStep} of ${i.name}`, onclick: () => lightbox(src) }) : null);
+  };
+  /** For a quick review: the screen the run ended on, its video, and what each check expected (with the judge's suggestion). */
+  const review = (i) => {
+    const run = i.runStamp ? finished.get(`${i.test}/${i.runStamp}`) : null;
+    if (!run) return null;
+    const base = `/files/${slug}/runs/${i.test}/${i.runStamp}`;
+    const last = [...run.steps].sort((a, b) => a.n - b.n).filter((s) => s.shot).pop();
+    const checks = run.checkpoints?.length
+      ? run.checkpoints.map((c) => ({ n: c.n, expected: c.expected, suggested: c.suggested, p: c.p }))
+      : run.test.lines.filter((l) => l.expected != null).map((l) => ({ expected: l.expected }));
+    if (!last && !run.video && !checks.length) return null;
+    return h("div", { class: "review", "data-review": i.test },
+      last ? h("figure", {}, h("img", { src: `${base}/${last.shot}`, alt: `Final screen of ${i.name} (step ${last.n})`, loading: "lazy", onclick: () => lightbox(`${base}/${last.shot}`) }), h("figcaption", { class: "muted small" }, `Final screen, step ${last.n}`)) : null,
+      run.video ? h("video", { controls: true, preload: "metadata", src: `${base}/${run.video}`, "aria-label": `Video of ${i.name}` }) : null,
+      checks.length ? h("div", { class: "expectations" }, h("div", { class: "muted small" }, "Expected"),
+        h("ul", {}, checks.map((c) => h("li", {}, c.n ? h("span", { class: "muted small" }, `Step ${c.n}: `) : null, c.expected, c.suggested ? [" ", suggestionBadge(c.suggested, c.p)] : null)))) : null);
+  };
+  /** Pass / Fail for a finished run, saved as the run's verdict (the note already saved is kept). */
+  const verdictActions = (i, verdict) => {
+    const key = `${i.test}/${i.runStamp}`;
+    const out = h("div");
+    const save = async (result) => {
+      try {
+        const saved = await api("PUT", `/api/projects/${slug}/runs/${i.test}/${i.runStamp}/verdict`, { result, note: verdict?.note ?? "" });
+        verdicts.set(key, saved.verdict);
+        draw();
+      } catch (err) { out.replaceChildren(fail(err)); }
+    };
+    const pick = (result, label) => h("button", { type: "button", class: `verdict-${result}${verdict?.result === result ? " chosen" : ""}`, "aria-pressed": String(verdict?.result === result), "data-verdict": result, onclick: () => save(result) }, label);
+    return h("div", { class: "verdict-actions" }, h("div", { class: "row-actions" }, pick("pass", "Pass"), pick("fail", "Fail")), out);
   };
   const row = (i) => {
     const verdict = i.runStamp ? verdicts.get(`${i.test}/${i.runStamp}`) : undefined;
     return h("tr", { class: `suite-row ${i.state}`, "data-test": i.test },
       h("td", {}, i.id ? h("span", { class: "case-id" }, i.id) : ""),
       h("td", {}, i.runStamp ? h("a", { href: `#/p/${slug}/t/${i.test}/run/${i.runStamp}` }, i.name) : h("a", { href: `#/p/${slug}/t/${i.test}` }, i.name)),
-      h("td", {}, i.state === "done" ? statusBadge(i.status) : statusBadge(i.state), i.state === "skipped" || i.state === "not-run" || i.state === "error" || (i.state === "done" && i.reason) ? h("div", { class: "muted small" }, i.state === "skipped" || i.state === "not-run" ? SKIP_TEXT(i) : i.reason) : null),
+      h("td", {}, i.state === "done" ? statusBadge(i.status) : statusBadge(i.state), i.state === "skipped" || i.state === "not-run" || i.state === "error" || (i.state === "done" && i.reason) ? h("div", { class: "muted small" }, i.state === "skipped" || i.state === "not-run" ? SKIP_TEXT(i) : i.reason) : null, liveStep(i), review(i)),
       h("td", {}, i.suggestedVerdict ? suggestionBadge(i.suggestedVerdict) : ""),
-      h("td", {}, verdict ? verdictBadge(verdict) : i.runStamp && verdict === null ? h("span", { class: "muted small" }, "not judged yet") : ""));
+      h("td", {}, verdict ? verdictBadge(verdict) : i.runStamp && verdict === null ? h("span", { class: "muted small" }, "not judged yet") : "", verdict !== undefined ? verdictActions(i, verdict) : null));
+  };
+  // The page redraws every 2 s while the suite runs. The table and a row whose data did not change are kept as they are, so
+  // images do not reload, a playing video is not cut, and the page does not jump under the reader.
+  const head = h("div");
+  const tbody = h("tbody");
+  const rows = new Map(); // test -> { sig, el }
+  const syncRows = () => {
+    const wanted = suite.items.map((i) => {
+      const key = `${i.test}/${i.runStamp}`;
+      const sig = JSON.stringify([i, verdicts.get(key), finished.has(key)]);
+      const kept = rows.get(i.test);
+      if (kept?.sig === sig) return kept.el;
+      kept?.el.remove();
+      const el = row(i);
+      rows.set(i.test, { sig, el });
+      return el;
+    });
+    wanted.forEach((el, k) => { if (tbody.children[k] !== el) tbody.insertBefore(el, tbody.children[k] ?? null); });
+    while (tbody.children.length > wanted.length) tbody.lastChild.remove();
   };
   const draw = () => {
-    const stopBtn = h("button", { type: "button", class: "danger", id: "stop-suite", onclick: async (e) => { e.target.disabled = true; try { await api("POST", `/api/projects/${slug}/suites/${stamp}/stop`); } catch (err) { e.target.after(fail(err)); } } }, "Stop after this test");
-    fill(body,
+    const stopBtn = h("button", { type: "button", class: "danger", id: "stop-suite", onclick: async (e) => { e.target.disabled = true; try { await api("POST", `/api/projects/${slug}/suites/${stamp}/stop`); } catch (err) { e.target.after(fail(err)); } } }, "Stop after the tests going");
+    fill(head,
       h("div", { style: "display:flex;gap:10px;align-items:center;flex-wrap:wrap" }, h("h1", { style: "margin:0" }, "Suite run"), statusBadge(suite.status)),
       h("p", { class: "sub" }, `${when(suite.startedAt)} · ${suiteCounts(suite)}`),
       suite.status === "inconclusive" ? h("p", { class: "notice", id: "suite-reason" }, "Inconclusive: no free simulator. The tests not run are listed below; run them again when one is free.") : null,
       suite.status === "error" ? h("p", { class: "notice bad" }, suite.reason) : null,
-      live() ? stopBtn : null,
-      h("table", { class: "suite-table", id: "suite-table" },
-        h("thead", {}, h("tr", {}, ["ID", "Test", "Result", "Suggested", "Your verdict"].map((x) => h("th", {}, x)))),
-        h("tbody", {}, suite.items.map(row))),
-      h("p", { class: "hint" }, "Open a test to confirm or change the suggested verdict. Skipped tests were not run."));
+      live() ? stopBtn : null);
+    syncRows();
   };
+  fill(body, head,
+    h("table", { class: "suite-table", id: "suite-table" },
+      h("thead", {}, h("tr", {}, ["ID", "Test", "Result", "Suggested", "Your verdict"].map((x) => h("th", {}, x)))),
+      tbody),
+    h("p", { class: "hint" }, "Pass or Fail saves your verdict for that run. Open a test to see every step. Skipped tests were not run."));
   if (!mount(ctx, [["Projects", "#/"], [slug, `#/p/${slug}`], ["Suite run", `#/p/${slug}/suite/${stamp}`]], body)) return;
   await loadVerdicts();
   draw();
@@ -771,6 +844,37 @@ async function suiteView(ctx, slug, stamp) {
     }, 2000);
     ctx.onLeave(() => clearInterval(poll));
   }
+}
+
+// ---- running: what is going now ----------------------------------------------------------------------------------
+async function runningView(ctx) {
+  const body = h("div");
+  const draw = ({ runs, suite }) => {
+    const waiting = suite ? suite.items.filter((i) => i.state === "pending") : [];
+    const link = (project, test, stamp, text) => h("a", { href: `#/p/${project}/t/${test}/run/${stamp}` }, text);
+    fill(body,
+      h("h1", {}, "Running"),
+      h("p", { class: "sub" }, "Studio runs one test at a time, or several at once when a suite asks for it."),
+      runs.length
+        ? h("div", { class: "card", id: "running-now" }, runs.map((run) => h("div", { class: "row", "data-test": run.test },
+            h("div", { class: "grow" }, link(run.project, run.test, run.stamp, run.name), h("div", { class: "muted small" }, `${run.project} · started ${when(run.startedAt)}`)),
+            statusBadge("running"))))
+        : h("p", { class: "muted", id: "running-none" }, "Nothing is running."),
+      suite ? h("h2", {}, "Suite run") : null,
+      suite ? h("p", { class: "sub" }, h("a", { href: `#/p/${suite.project}/suite/${suite.stamp}` }, `${suite.project} · ${suiteCounts(suite)}`)) : null,
+      waiting.length
+        ? h("div", { class: "card", id: "running-waiting" }, waiting.map((i) => h("div", { class: "row", "data-test": i.test },
+            h("div", { class: "grow" }, i.id ? h("span", { class: "case-id" }, i.id) : null, h("a", { href: `#/p/${suite.project}/t/${i.test}` }, i.name)),
+            statusBadge("pending"))))
+        : null);
+  };
+  if (!mount(ctx, [["Projects", "#/"], ["Running", "#/running"]], body)) return;
+  draw(await api("GET", "/api/running"));
+  const poll = setInterval(async () => {
+    if (ctx.dead) return clearInterval(poll);
+    try { draw(await api("GET", "/api/running")); } catch { /* Studio restarting: try again */ }
+  }, 2000);
+  ctx.onLeave(() => clearInterval(poll));
 }
 
 // ---- fixtures: photos, files and named sets ------------------------------------------------------------------------
@@ -866,8 +970,8 @@ async function settingsView(ctx, saved) {
   mount(ctx, [["Projects", "#/"], ["Settings", "#/settings"]],
     h("h1", {}, "Settings"),
     h("h2", {}, "Judge"),
-    h("p", { class: "sub" }, "The judge looks at the screenshot at each Check line and suggests pass or fail. You still decide every result."),
-    h("p", { class: "notice " + (active ? "good" : "") , id: "judge-now" }, active ? `On now: ${active.model} (${active.backend}).` : "Off now: checkpoints are saved as \"unsure\"."),
+    h("p", { class: "sub" }, "The judge reads the screen's text at each Check line and, when that is not clear enough, looks at the screenshot, then suggests pass or fail. You still decide every result."),
+    h("p", { class: "notice " + (active ? "good" : "") , id: "judge-now" }, active ? `On now: ${[active.screenText ? "TypeSafe on the screen's text" : null, active.model ? `${active.model} (${active.backend}) on the screenshot` : null].filter(Boolean).join(", then ")}.` : "Off now: checkpoints are saved as \"unsure\"."),
     saved ? h("p", { class: "notice good", id: "judge-saved" }, saved) : null,
     h("div", { class: "panel" }, form, msg));
 }
@@ -875,6 +979,7 @@ async function settingsView(ctx, saved) {
 // ---- router ------------------------------------------------------------------------------------------------------
 const routes = [
   [/^#\/settings$/, settingsView],
+  [/^#\/running$/, runningView],
   [/^#\/p\/([^/]+)\/t\/([^/]+)\/run\/([^/]+)$/, runView],
   [/^#\/p\/([^/]+)\/t\/([^/]+)$/, editorView],
   [/^#\/p\/([^/]+)\/suite\/([^/]+)$/, suiteView],

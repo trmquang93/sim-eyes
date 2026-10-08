@@ -13,6 +13,7 @@ import { dirname, extname, join } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { keepDaemonAlive, recoverStaleDaemon, warmUpDaemon } from "./daemon.mjs";
 import { judgeClient } from "./judge-client.mjs";
 import { Refusal, addBuild, buildAppPath, cleanUploads, installBuild, listBuilds, realExec, removeBuild, uploadPath } from "./builds.mjs";
 import { checkFile } from "./file-facts.mjs";
@@ -23,7 +24,7 @@ import { openSimEyes } from "./mcp-client.mjs";
 import { studioClient, mapLines } from "./map-line.mjs";
 import { runTest } from "./run-test.mjs";
 import * as store from "./store.mjs";
-import { expandSelector, runSuite } from "./suite.mjs";
+import { expandSelector, parseConcurrency, runSuite } from "./suite.mjs";
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), "public");
 const CODE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -90,10 +91,18 @@ function checkOrigin(req, port) {
   if (origin && !allowed.has(new URL(origin).host)) throw new HttpError(403, "Studio does not take requests from other pages.");
 }
 
-/** The judge Studio uses: pplx-decider when this Mac is set up for it (judge-client.mjs), else none and every checkpoint is "unsure". */
-export function defaultJudge(env = process.env) {
+/**
+ * The judge Studio uses: TypeSafe reads each checkpoint's screen text first (`textClient`), and pplx-decider (judge-client.mjs)
+ * looks at the screenshot when the text cannot settle it. Either may be missing; with neither there is no judge and every
+ * checkpoint is "unsure".
+ */
+export function defaultJudge(env = process.env, { textClient = null } = {}) {
   const client = judgeClient({ env });
-  return client ? { info: { backend: client.backend, model: client.model }, run: (p) => judgeCheckpoint(p, { client }) } : null;
+  if (!client && !textClient) return null;
+  return {
+    info: { backend: client?.backend ?? "typesafe", ...(client ? { model: client.model } : {}), screenText: Boolean(textClient) },
+    run: (p) => judgeCheckpoint(p, { client, textClient }),
+  };
 }
 
 /** A path inside a project's fixtures folder from what a URL carried; anything that could leave the folder is refused. */
@@ -142,24 +151,35 @@ const fieldsOf = (input) => {
   }
 };
 
-export async function startStudio({ root = store.defaultRoot(), port = 4777, openBrowser = false, openSim = openSimEyes, exec = realExec, mapClient = studioClient, judge: baseJudge = defaultJudge(), env = process.env, ledgerPath, devicesRoot, fileDeps = {} } = {}) {
+export async function startStudio({ root = store.defaultRoot(), port = 4777, openBrowser = false, openSim = openSimEyes, exec = realExec, mapClient = studioClient, judge: injectedJudge, warmUp = warmUpDaemon, recover = async () => { await recoverStaleDaemon(); await warmUp(); }, env = process.env, ledgerPath, devicesRoot, fileDeps = {} } = {}) {
+  keepDaemonAlive(env);
   await mkdir(root, { recursive: true });
   // The judge follows the Settings page: "env" keeps what the environment gave (`baseJudge`), any other choice builds a new one.
   const settingsFile = settingsPath(root);
   let settings = await readSettings(settingsFile);
-  const judgeFor = (j) => (j.source === "env" ? baseJudge : defaultJudge(judgeEnv(env, j)));
+  const textClient = mapClient();
+  const baseJudge = injectedJudge === undefined ? defaultJudge(env, { textClient }) : injectedJudge;
+  const judgeFor = (j) => (j.source === "env" ? baseJudge : defaultJudge(judgeEnv(env, j), { textClient: j.source === "off" ? null : textClient }));
   let judge = judgeFor(settings.judge);
   const runs = new Map(); // runId -> { events, clients, done }
-  let active = null;
+  const activeRuns = new Map(); // runId -> { project, test, name, stamp, startedAt }; a suite may have several going
   let activeSuite = null;
+  const isRunning = (prefix) => [...activeRuns.keys()].some((id) => id.startsWith(prefix));
+  // Fixtures keep one ledger file for every simulator: two runs preparing at once would overwrite each other's entries.
+  let fixturesLock = Promise.resolve();
+  const withFixturesLock = (fn) => {
+    const next = fixturesLock.then(fn, fn);
+    fixturesLock = next.catch(() => {});
+    return next;
+  };
   const stops = new Set(); // runIds and suiteIds the tester asked to stop
   const sockets = new Set();
 
   const runKey = (project, test, stamp) => `${project}.${test}.${stamp}`;
 
-  /** Starts a run and returns at once; `finished` settles with the run's outcome. A suite starts its own runs (`suite`), one at a time. */
+  /** Starts a run and returns at once; `finished` settles with the run's outcome. A suite starts its own runs (`suite`), as many at once as its width. */
   async function startRun(projectSlug, testSlug, { suite = null } = {}) {
-    if (active || (activeSuite && !suite)) throw new HttpError(409, "A run is already in progress. Wait for it to end.");
+    if (!suite && (activeRuns.size || activeSuite)) throw new HttpError(409, "A run is already in progress. Wait for it to end.");
     const project = await store.readProject(root, projectSlug);
     const test = await store.readTest(root, projectSlug, testSlug);
     if (!test.lines.some((l) => l.step)) throw new HttpError(400, "This test has no steps yet. Write a line and save it.");
@@ -174,12 +194,18 @@ export async function startStudio({ root = store.defaultRoot(), port = 4777, ope
     const state = { events: [], clients: new Set(), done: false };
     runs.set(runId, state);
     for (const old of [...runs.keys()].slice(0, Math.max(0, runs.size - 20))) runs.delete(old);
-    active = runId;
     const startedAt = new Date().toISOString();
+    activeRuns.set(runId, { project: projectSlug, test: testSlug, name: test.name, stamp, startedAt });
     await store.writeRun(root, projectSlug, testSlug, stamp, { test: { name: test.name, start: test.start, lines: test.lines }, app: project.app, status: "running", startedAt, steps: [] });
 
     const emit = (event) => {
       state.events.push(event);
+      // The suite page shows each running test's latest step: keep it where the suite reply can read it.
+      const active = activeRuns.get(runId);
+      if (active && event.type === "phase") active.live = { phase: event.phase };
+      if (active && event.type === "step-start") active.live = { ...active.live, n: event.n, line: event.line };
+      // `n` is the step going now; the screenshot is the last one a step left, so it can be one step behind `n`.
+      if (active && event.type === "step-end") active.live = { n: event.n, line: event.line, ...(event.shot ? { shot: event.shot, shotStep: event.n } : active.live) };
       for (const res of state.clients) res.write(`data: ${JSON.stringify(event)}\n\n`);
     };
     const finished = (async () => {
@@ -194,7 +220,7 @@ export async function startStudio({ root = store.defaultRoot(), port = 4777, ope
           runDir,
           call: sim.call,
           install: (p) => installBuild(p, { exec }),
-          fixtures: (p) => applyFixtures({ ...p, sets, fixturesDir: store.fixturesDir(root, projectSlug), exec, ...(ledgerPath ? { ledgerPath } : {}), ...(devicesRoot ? { devicesRoot } : {}) }),
+          fixtures: (p) => withFixturesLock(() => applyFixtures({ ...p, sets, fixturesDir: store.fixturesDir(root, projectSlug), exec, ...(ledgerPath ? { ledgerPath } : {}), ...(devicesRoot ? { devicesRoot } : {}) })),
           fileCheck: (p) => checkFile({ ...p, deps: { ...(devicesRoot ? { devicesRoot } : {}), ...fileDeps } }),
           judge: judge?.run ?? null,
           judgeInfo: judge?.info ?? null,
@@ -207,7 +233,7 @@ export async function startStudio({ root = store.defaultRoot(), port = 4777, ope
         await sim?.close().catch(() => {});
       }
       await store.writeRun(root, projectSlug, testSlug, stamp, run);
-      active = null;
+      activeRuns.delete(runId);
       stops.delete(runId);
       state.done = true;
       emit({ type: "run-end", status: run.status });
@@ -218,12 +244,18 @@ export async function startStudio({ root = store.defaultRoot(), port = 4777, ope
     return { runId, stamp, finished };
   }
 
-  async function startSuite(projectSlug, selector) {
-    if (active || activeSuite) throw new HttpError(409, "A run is already in progress. Wait for it to end.");
+  async function startSuite(projectSlug, selector, concurrencyInput) {
+    if (activeRuns.size || activeSuite) throw new HttpError(409, "A run is already in progress. Wait for it to end.");
     await store.readProject(root, projectSlug);
     let picked;
     try {
       picked = expandSelector(await store.listTests(root, projectSlug), selector);
+    } catch (err) {
+      throw new HttpError(400, err.message);
+    }
+    let concurrency;
+    try {
+      concurrency = parseConcurrency(concurrencyInput);
     } catch (err) {
       throw new HttpError(400, err.message);
     }
@@ -241,6 +273,9 @@ export async function startStudio({ root = store.defaultRoot(), port = 4777, ope
         await runSuite({
           tests: picked,
           selector,
+          concurrency,
+          warmUp,
+          recover,
           save: (suite) => store.writeSuite(root, projectSlug, stamp, suite),
           shouldStop: () => stops.has(suiteId),
           onEvent: emit,
@@ -265,7 +300,16 @@ export async function startStudio({ root = store.defaultRoot(), port = 4777, ope
   }
 
   /** A suite.json that says "running" but is not the active suite was cut off (Studio stopped): say so. */
-  const settleSuite = (project, suite) => (suite.status === "running" && activeSuite !== `suite.${project}.${suite.stamp}` ? { ...suite, status: "error", reason: "Studio stopped before this suite ended." } : suite);
+  const settleSuite = (project, suite) => {
+    if (suite.status !== "running") return suite;
+    if (activeSuite !== `suite.${project}.${suite.stamp}`) return { ...suite, status: "error", reason: "Studio stopped before this suite ended." };
+    // A test going now shows the step it is on, and the run it belongs to (its stamp is not in suite.json until it ends).
+    const items = suite.items.map((i) => {
+      const run = i.state === "running" ? [...activeRuns.values()].find((r) => r.project === project && r.test === i.test) : null;
+      return run ? { ...i, live: { stamp: run.stamp, ...run.live } } : i;
+    });
+    return { ...suite, items };
+  };
 
   /** A duplicate case ID is a conflict, not a malformed request. */
   const writeTestChecked = async (project, slug, test) => {
@@ -278,13 +322,22 @@ export async function startStudio({ root = store.defaultRoot(), port = 4777, ope
 
   /** A run.json that says "running" but is not the active run was cut off (Studio stopped): say so. */
   const settle = (project, test, run) =>
-    run.status === "running" && active !== runKey(project, test, run.stamp) ? { ...run, status: "error", reason: "Studio stopped before this run ended." } : run;
+    run.status === "running" && !activeRuns.has(runKey(project, test, run.stamp)) ? { ...run, status: "error", reason: "Studio stopped before this run ended." } : run;
 
   const routes = [];
   const route = (method, pattern, handler) => routes.push({ method, re: new RegExp(`^${pattern}$`), handler });
   const S = "([^/]+)";
 
-  route("GET", "/api/status", async () => ({ typesafe: Boolean(process.env.TYPESAFE_API_KEY), mapper: Boolean(mapClient()), root, activeRun: active, activeSuite, judge: judge?.info ?? null, bundleVersion: await codeVersion() }));
+  route("GET", "/api/status", async () => ({ typesafe: Boolean(process.env.TYPESAFE_API_KEY), mapper: Boolean(mapClient()), root, activeRun: [...activeRuns.keys()][0] ?? null, activeSuite, judge: judge?.info ?? null, bundleVersion: await codeVersion() }));
+  // What is going now: the active run, and the suite it belongs to (with the tests still waiting), if any.
+  route("GET", "/api/running", async () => {
+    const [, suiteProject, suiteStamp] = activeSuite?.split(".") ?? [];
+    // runSuite writes suite.json right after the suite starts: before that, the suite has no items to show.
+    const saved = activeSuite ? await store.readSuite(root, suiteProject, suiteStamp).catch(() => ({ stamp: suiteStamp, status: "running", items: [] })) : null;
+    const suite = saved && { project: suiteProject, ...saved };
+    const runs = [...activeRuns.values()];
+    return { run: runs[0] ?? null, runs, suite };
+  });
   route("GET", "/api/settings", async () => ({ judge: describeJudge(env, settings.judge), active: judge?.info ?? null }));
   route("PUT", "/api/settings/judge", async (req) => {
     let next;
@@ -305,6 +358,12 @@ export async function startStudio({ root = store.defaultRoot(), port = 4777, ope
     return store.createProject(root, { name, app });
   });
   route("GET", `/api/projects/${S}`, async (_req, [p]) => store.readProject(root, p));
+  // A run or suite going keeps its project: it is writing into the project folder.
+  route("DELETE", `/api/projects/${S}`, async (_req, [p]) => {
+    if (isRunning(`${p}.`) || activeSuite?.startsWith(`suite.${p}.`)) throw new HttpError(409, "A run is in progress in this project. Delete it when it ends.");
+    await store.deleteProject(root, p);
+    return { ok: true };
+  });
   route("GET", `/api/projects/${S}/tests`, async (_req, [p]) => store.listTests(root, p));
   route("POST", `/api/projects/${S}/tests`, async (req, [p]) => {
     const body = await readJsonBody(req);
@@ -327,6 +386,16 @@ export async function startStudio({ root = store.defaultRoot(), port = 4777, ope
     return { slug: t, ...test };
   });
   route("DELETE", `/api/projects/${S}/tests/${S}`, async (_req, [p, t]) => (await store.deleteTest(root, p, t), { ok: true }));
+  route("DELETE", `/api/projects/${S}/tests`, async (req, [p]) => {
+    const { tests } = await readJsonBody(req);
+    if (!Array.isArray(tests) || !tests.length || tests.some((t) => typeof t !== "string")) throw new HttpError(400, "Pick the tests to delete.");
+    if (tests.some((t) => isRunning(`${p}.${t}.`))) throw new HttpError(409, "A run of one of these tests is still going. Delete them when it ends.");
+    try {
+      return { deleted: await store.deleteTests(root, p, tests) };
+    } catch (err) {
+      throw /No such test/.test(err.message) ? new HttpError(404, err.message) : err;
+    }
+  });
   // Groups: move tests into a group by name (empty = out of any group). A group exists while a test is in it.
   route("PUT", `/api/projects/${S}/groups`, async (req, [p]) => {
     const { tests, group } = await readJsonBody(req);
@@ -345,12 +414,12 @@ export async function startStudio({ root = store.defaultRoot(), port = 4777, ope
   route("GET", `/api/projects/${S}/runs/${S}/${S}`, async (_req, [p, t, s]) => settle(p, t, await store.readRun(root, p, t, s)));
   // A run still going keeps its folder: it is writing screenshots and a video into it.
   route("DELETE", `/api/projects/${S}/runs/${S}/${S}`, async (_req, [p, t, s]) => {
-    if (active === runKey(p, t, s)) throw new HttpError(409, "This run is still going. Delete it when it ends.");
+    if (activeRuns.has(runKey(p, t, s))) throw new HttpError(409, "This run is still going. Delete it when it ends.");
     await store.deleteRun(root, p, t, s);
     return { ok: true };
   });
   route("DELETE", `/api/projects/${S}/runs/${S}`, async (_req, [p, t]) => {
-    const stamps = (await store.listRuns(root, p, t)).map((r) => r.stamp).filter((s) => active !== runKey(p, t, s));
+    const stamps = (await store.listRuns(root, p, t)).map((r) => r.stamp).filter((s) => !activeRuns.has(runKey(p, t, s)));
     for (const stamp of stamps) await store.deleteRun(root, p, t, stamp);
     return { deleted: stamps.length };
   });
@@ -358,13 +427,16 @@ export async function startStudio({ root = store.defaultRoot(), port = 4777, ope
 
   route("POST", `/api/projects/${S}/runs/${S}/${S}/stop`, async (_req, [p, t, s]) => {
     const id = runKey(p, t, s);
-    if (active !== id) throw new HttpError(409, "This run is not going.");
+    if (!activeRuns.has(id)) throw new HttpError(409, "This run is not going.");
     stops.add(id);
     return { ok: true };
   });
 
-  // Suites: run the ticked tests, or a group, one after another.
-  route("POST", `/api/projects/${S}/suites`, async (req, [p]) => startSuite(p, (await readJsonBody(req)).selector));
+  // Suites: run the ticked tests, or a group, one after another (or `concurrency` at a time, each on its own simulator).
+  route("POST", `/api/projects/${S}/suites`, async (req, [p]) => {
+    const { selector, concurrency } = await readJsonBody(req);
+    return startSuite(p, selector, concurrency);
+  });
   route("GET", `/api/projects/${S}/suites`, async (_req, [p]) => (await store.listSuites(root, p)).map((s) => settleSuite(p, s)));
   route("GET", `/api/projects/${S}/suites/${S}`, async (_req, [p, s]) => settleSuite(p, await store.readSuite(root, p, s)));
   route("POST", `/api/projects/${S}/suites/${S}/stop`, async (_req, [p, s]) => {

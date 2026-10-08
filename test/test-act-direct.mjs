@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { BACK_GOAL, backTargets, dragEnds, gestureNode, pinchPlan, tapGoalNames, tapTarget } from "../act-direct.mjs";
+import { BACK_GOAL, backTargets, dragEnds, gestureNode, gridPlan, pinchPlan, tapCount, tapGoalNames, tapTarget } from "../act-direct.mjs";
 import { controlsLine, screenLine } from "../screen-summary.mjs";
 import { listTargets, screenContext } from "../targets.mjs";
 
@@ -139,4 +139,35 @@ for (const bad of [{}, { scale: 1 }, { scale: 0 }, { scale: 6 }, { scale: 0.1 },
 assert.throws(() => pinchPlan({ scale: 2, x: 100 }), /both x and y/, "half a centre is a mistake, not a default");
 assert.throws(() => pinchPlan({ scale: 2, x: "a", y: 3 }), /both x and y/);
 
+// tap_grid: a grid of toggles (Photos picker) is tapped once per cell; a spacing of 0 would tap one cell twice and undo it.
+{
+  const screen = { width: 440, height: 956 };
+  const five = gridPlan({ x: 44, y: 168, dx: 88, dy: 88, cols: 5, rows: 2 }, screen);
+  assert.equal(five.points.length, 10);
+  assert.deepEqual(five.points[0], { x: 44, y: 168 });
+  assert.deepEqual(five.points[5], { x: 44, y: 256 }, "row by row: the second row starts at the first column");
+  assert.deepEqual(five.points[9], { x: 396, y: 256 });
+  assert.equal(gridPlan({ x: 44, y: 168, dx: 88, dy: 88, cols: 5, rows: 8, count: 38 }, screen).points.length, 38, "count stops inside the last row");
+  assert.deepEqual(gridPlan({ x: 10.4, y: 20.6 }, screen).points, [{ x: 10, y: 21 }], "one cell is a plain tap");
+  assert.deepEqual(gridPlan({ x: "44", y: "168", dx: "88", cols: "2" }, screen).points, [{ x: 44, y: 168 }, { x: 132, y: 168 }]);
+  assert.throws(() => gridPlan({ cols: 2, dx: 10 }, screen), /needs x and y/);
+  assert.throws(() => gridPlan({ x: 1, y: 1, cols: 3 }, screen), /need dx/, "no dx means the same cell tapped three times");
+  assert.throws(() => gridPlan({ x: 1, y: 1, rows: 3, dx: 5 }, screen), /need dy/);
+  assert.throws(() => gridPlan({ x: 1, y: 1, cols: 0 }, screen), /cols must be a whole number/);
+  assert.throws(() => gridPlan({ x: 1, y: 1, cols: 2.5, dx: 4 }, screen), /cols must be a whole number/);
+  assert.throws(() => gridPlan({ x: 1, y: 1, dx: 5, cols: 2, count: 3 }, screen), /more than cols x rows/);
+  assert.throws(() => gridPlan({ x: 0, y: 0, dx: 1, dy: 1, cols: 11, rows: 10 }, screen), /more than the 100/);
+  assert.throws(() => gridPlan({ x: 400, y: 100, dx: 88, cols: 2 }, screen), /\(488, 100\) is outside the 440x956 screen/);
+}
+
 console.log("test-act-direct: ok");
+
+// double_tap and tap_at count: a double tap is both touches in one device call, so count must be 1 or 2 and anything else is
+// refused. If a bad count were ignored again, `count: 3` would silently single-tap and the agent would never learn why.
+assert.equal(tapCount({}, "tap_at"), 1);
+assert.equal(tapCount({ count: 2 }, "tap_at"), 2);
+assert.equal(tapCount({}, "double_tap"), 2);
+assert.equal(tapCount({ count: 2 }, "double_tap"), 2);
+assert.throws(() => tapCount({ count: 3 }, "tap_at"), /tap_at count must be 1 or 2.*tap_grid/);
+assert.throws(() => tapCount({ count: "x" }, "tap_at"), /count must be 1 or 2/);
+assert.throws(() => tapCount({ count: 1 }, "double_tap"), /always two taps/);

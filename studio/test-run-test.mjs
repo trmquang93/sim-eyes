@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { formatSessionPrefix } from "../client-sessions.mjs";
-import { runTest } from "./run-test.mjs";
+import { SESSION_LOST_REASON, runTest } from "./run-test.mjs";
 
 const dir = await mkdtemp(join(tmpdir(), "studio-run-"));
 const video = join(dir, "clip.mp4");
@@ -98,6 +98,24 @@ try {
         : fakeServer().call(name, args)),
     });
     assert.equal(tapRun.reason, 'tap "General": the exact tap failed (no label).', "the reason is the sentence, not the lead-in to the fallback");
+    const daemonJson = JSON.stringify({ success: false, error: { code: "COMMAND_FAILED", message: "Failed to start daemon", details: { kind: "daemon_startup_failed" } } }, null, 2);
+    const daemonRun = await runTest({
+      test: { ...test, lines: [lines[1]] },
+      app: "x",
+      runDir: await newDir(),
+      call: async (name, args) => (name === "batch" && args.actions[0].tool === "tap" ? text(`1. tap "General": failed: ${daemonJson}\n   screen: x`, { isError: true }) : fakeServer().call(name, args)),
+    });
+    assert.match(daemonRun.reason, /Failed to start daemon/, "a multi-line JSON error still names the daemon, so a suite can run the test again");
+    const lostJson = (dispatched) => JSON.stringify({ success: false, error: { code: "SESSION_NOT_FOUND", message: "iOS snapshot requires an active app session", details: { reason: "ios_app_session_required", dispatched } } }, null, 2);
+    const lostRun = async (dispatched) =>
+      runTest({
+        test: { ...test, lines: [lines[1]] },
+        app: "x",
+        runDir: await newDir(),
+        call: async (name, args) => (name === "batch" && args.actions[0].tool === "tap" ? text(`1. tap "General": failed: ${lostJson(dispatched)}\n   screen: x`, { isError: true }) : fakeServer().call(name, args)),
+      });
+    assert.equal((await lostRun("no")).reason, SESSION_LOST_REASON, "a session the daemon lost before the step ran is named, so a suite can run the test again");
+    assert.doesNotMatch((await lostRun("yes")).reason, /session was lost before the step ran/, "a step that may have run is never retried as if it had not");
     assert.equal(run.steps[2].shot, "02.png", "the failing step's screenshot is kept");
     assert.ok(!batches(server.calls).some((a) => a.tool === "back"));
     assert.ok(existsSync(join(runDir, "video.mp4")));
@@ -267,6 +285,20 @@ try {
     assert.deepEqual(judged.map((j) => j.imagePath), [join(runDir, "02.png"), join(runDir, "04.png")], "the judge gets the screenshot the step saved");
     assert.equal(judged[0].screen, 'screen: "Settings"', "and the screen text the step reported");
     assert.ok(order.indexOf("release") < order.indexOf("judge"), "the simulator is released before the model is asked: it can take a minute per screenshot");
+  }
+
+  // Which judge decided (screen text or screenshot) and why the text did not settle it is saved with the checkpoint: a reviewer weighs them differently.
+  {
+    const checks = { ...test, lines: [{ text: "Check A", step: { tool: "look" }, expected: "A" }, { text: "Check B", step: { tool: "look" }, expected: "B" }] };
+    const run = await runTest({
+      test: checks,
+      app: "x",
+      runDir: await newDir(),
+      call: fakeServer().call,
+      judge: async (p) => (p.expected === "A" ? { suggested: "pass", p: 0.95, via: "screen" } : { suggested: "fail", p: 0.05, via: "screenshot", fallback: "the screen text does not carry what the expected result is about" }),
+      judgeInfo: { backend: "openrouter", screenText: true },
+    });
+    assert.deepEqual(run.checkpoints.map((c) => [c.via, c.fallback]), [["screen", undefined], ["screenshot", "the screen text does not carry what the expected result is about"]]);
   }
 
   // No judge, or a judge that breaks: the run still completes, every checkpoint is "unsure", and the reviewer is told once.

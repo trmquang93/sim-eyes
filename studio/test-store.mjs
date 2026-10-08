@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { caseFields, createProject, deleteRun, listProjects, listRuns, listSuites, listTests, newRunDir, newSuiteDir, readFixtureSets, readRun, readSuite, readTest, resolveInProject, setVerdict, slug, updateProject, setGroup, writeFixtureSets, writeRun, writeSuite, writeTest } from "./store.mjs";
+import { caseFields, createProject, deleteProject, deleteRun, deleteTests, listProjects, listRuns, listSuites, listTests, newRunDir, newSuiteDir, readFixtureSets, readRun, readSuite, readTest, resolveInProject, setVerdict, slug, updateProject, setGroup, writeFixtureSets, writeRun, writeSuite, writeTest } from "./store.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "studio-store-"));
 try {
@@ -113,6 +113,21 @@ try {
   await assert.rejects(resolveInProject(root, "link/secret.txt"), /outside the project folder/, "a symlink out of the folder is refused");
   await rm(outside, { recursive: true });
   await mkdir(join(root, "x"), { recursive: true });
+  // Deleting tests in a batch checks every test first; deleting a project removes its folder and only a project folder.
+  {
+    await createProject(root, { name: "Scratch" });
+    for (const n of ["a", "b", "c"]) await writeTest(root, "scratch", n, { name: n, start: "fresh", lines: [] });
+    await assert.rejects(deleteTests(root, "scratch", ["a", "nope"]), /No such test: nope/);
+    assert.equal((await listTests(root, "scratch")).length, 3, "nothing was deleted when one test was missing");
+    assert.equal(await deleteTests(root, "scratch", ["a", "b"]), 2);
+    assert.deepEqual((await listTests(root, "scratch")).map((t) => t.slug), ["c"]);
+    await deleteProject(root, "scratch");
+    assert.deepEqual((await listProjects(root)).map((p) => p.slug), ["pdf-tools"]);
+    await mkdir(join(root, "not-a-project"));
+    await assert.rejects(deleteProject(root, "not-a-project"), { code: "ENOENT" }, "a folder without project.json is not deleted");
+    await assert.rejects(deleteProject(root, "../x"), /Not a valid project/);
+    await rm(join(root, "not-a-project"), { recursive: true });
+  }
   console.log("test-store: ok");
 } finally {
   await rm(root, { recursive: true, force: true });

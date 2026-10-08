@@ -11,7 +11,9 @@ const video = join(root, "clip.mp4");
 await writeFile(video, "mp4");
 const UDID = "8F395E81-CF05-425A-B3C8-CA63CFDE8FD6";
 let gate = Promise.resolve();
+let hold = null; // { file, promise }: the step that saves `file` waits, so a run can be caught between two steps
 const sim = { acquires: 0, releases: 0 };
+let daemonFailures = 0;
 const text = (t, extra = {}) => ({ content: [{ type: "text", text: `${formatSessionPrefix("se-1", false)}${t}` }], ...extra });
 const openSim = async () => ({
   async call(name, args = {}) {
@@ -20,18 +22,32 @@ const openSim = async () => ({
     const [a] = args.actions;
     if (a.tool === "record" && a.action === "stop") return text(`1. record: stopped. Video: ${video}`);
     if (a.tool === "record") return text("1. record: started.");
+    if (daemonFailures > 0) return daemonFailures--, text("1. failed: Error (COMMAND_FAILED): Failed to start daemon", { isError: true });
     await gate;
+    if (hold && a.save.endsWith(hold.file)) await hold.promise;
     await writeFile(a.save, "png");
     return text(`1. ${a.tool}: done.\n   screen: "Home"\n   saved ${a.save}`);
   },
   async close() {},
 });
 const execCalls = [];
-const exec = async (file, args) => (execCalls.push([file, ...args]), {});
+let execGoing = 0;
+let execOverlap = false; // two simctl calls at once: only parallel runs could do that
+const exec = async (file, args) => {
+  execCalls.push([file, ...args]);
+  execGoing += 1;
+  execOverlap ||= execGoing > 1;
+  await new Promise((r) => setTimeout(r, 5));
+  execGoing -= 1;
+  return {};
+};
 const judged = [];
 const judge = { info: { backend: "openrouter", model: "pplx-test" }, run: async (p) => (judged.push(p), { suggested: "pass", p: 0.93 }) };
 
-const studio = await startStudio({ root, port: 0, openSim, exec, judge, mapClient: () => null, ledgerPath: join(root, "ledger.json") });
+const warmed = [];
+const recovered = [];
+const studioEnv = {};
+const studio = await startStudio({ root, port: 0, openSim, exec, judge, warmUp: async () => warmed.push(1), recover: async () => recovered.push(1), env: studioEnv, mapClient: () => null, ledgerPath: join(root, "ledger.json") });
 const port = studio.server.address().port;
 const call = async (method, path, body) => {
   const res = await fetch(`${studio.url}${path}`, { method, headers: body === undefined ? {} : { "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -132,6 +148,62 @@ try {
   release();
   await idle();
   assert.equal((await call("GET", `${base}/runs/pick-one/${single.data.stamp}`)).data.status, "stopped");
+  // Parallel: a suite asked for two at a time leases two simulators at once, and fixtures are applied one run after the other,
+  // because they share one ledger file (two writers would lose each other's entries).
+  assert.equal((await call("POST", `${base}/suites`, { selector: { group: "PDF Converter" }, concurrency: 0 })).status, 400);
+  assert.equal((await call("POST", `${base}/suites`, { selector: { group: "PDF Converter" }, concurrency: 99 })).status, 400);
+  for (const name of ["Par one", "Par two"]) {
+    await call("POST", `${base}/tests`, { name, group: "Parallel" });
+    await call("PUT", `${base}/tests/${name.toLowerCase().replace(/ /g, "-")}`, { name, start: "fresh", lines, group: "Parallel", fixtures: ["photos-3"] });
+  }
+  gate = new Promise((r) => (release = r));
+  const at = sim.acquires;
+  execOverlap = false;
+  const par = await call("POST", `${base}/suites`, { selector: { group: "Parallel" }, concurrency: 2 });
+  assert.equal(par.status, 200);
+  await waitFor(() => sim.acquires === at + 2);
+  const going = (await call("GET", "/api/running")).data;
+  assert.equal(going.runs.length, 2, "both tests are running at the same time");
+  assert.deepEqual(going.runs.map((r) => r.test).sort(), ["par-one", "par-two"]);
+  assert.equal(sim.releases, at, "neither has finished: they were waiting on the gate together");
+  release();
+  await idle();
+  gate = Promise.resolve();
+  const parSuite = (await call("GET", `${base}/suites/${par.data.stamp}`)).data;
+  assert.equal(parSuite.status, "completed");
+  assert.deepEqual(parSuite.items.map((i) => [i.test, i.state, i.status]), [["par-one", "done", "completed"], ["par-two", "done", "completed"]]);
+  assert.equal(sim.releases, sim.acquires, "no lease is left behind");
+  assert.equal(execOverlap, false, "fixtures of parallel runs never ran at the same time");
+  assert.equal(warmed.length, 1, "the daemon was warmed once for the parallel suite");
+
+  // Studio keeps the daemon alive for the whole suite, and a test that lost the daemon is run again after one recovery.
+  assert.equal(studioEnv.AGENT_DEVICE_DAEMON_IDLE_TIMEOUT_MS, "7200000");
+  daemonFailures = 1;
+  const healed = await call("POST", `${base}/suites`, { selector: { tests: ["par-one", "par-two"] }, concurrency: 2 });
+  await idle();
+  const healedSuite = (await call("GET", `${base}/suites/${healed.data.stamp}`)).data;
+  assert.deepEqual(healedSuite.items.map((i) => [i.test, i.state, i.status]), [["par-one", "done", "completed"], ["par-two", "done", "completed"]], "no test is lost to the daemon");
+  assert.deepEqual(recovered, [1], "one recovery");
+  assert.equal(sim.releases, sim.acquires, "no lease is left behind");
+
+  // The suite page shows each running test's latest step and the screen it left, so a tester sees progress without opening every run.
+  let free;
+  hold = { file: "02.png", promise: new Promise((r) => (free = r)) };
+  const watched = await call("POST", `${base}/suites`, { selector: { group: "Parallel" }, concurrency: 2 });
+  await waitFor(async () => (await call("GET", `${base}/suites/${watched.data.stamp}`)).data?.items?.every((i) => i.live?.shot === "01.png"));
+  const mid = (await call("GET", `${base}/suites/${watched.data.stamp}`)).data.items;
+  for (const i of mid) {
+    assert.equal(i.state, "running");
+    assert.equal(i.live.n, 2, "the step going now");
+    assert.equal(i.live.shotStep, 1, "the screenshot is the last finished step's");
+    assert.ok(i.live.stamp, "the run the screenshot belongs to");
+    assert.equal((await fetch(`${studio.url}/files/pdf-tools/runs/${i.test}/${i.live.stamp}/${i.live.shot}`)).status, 200, "the screenshot can be fetched while the run goes");
+  }
+  hold = null;
+  free();
+  await idle();
+  assert.equal((await call("GET", `${base}/suites/${watched.data.stamp}`)).data.items.some((i) => i.live), false, "a finished test has its run stamp, no live step");
+
   console.log("test-studio-suite: ok");
 } finally {
   await studio.close();

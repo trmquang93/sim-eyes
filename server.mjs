@@ -22,7 +22,7 @@ import {
 import { needsShot, shortBatchReminder } from "./batch-plan.mjs";
 import { TAP_FALLBACK_STEPS, helpRequest, notRunText, pausedReminder, stepFailed, tapResult, tapWithFallback } from "./tap-recovery.mjs";
 import { staleSimEyesSessions } from "./stale-sessions.mjs";
-import { BACK_GOAL, backTargets, dragEnds, gestureNode, pinchPlan, tapGoalNames, tapTarget } from "./act-direct.mjs";
+import { BACK_GOAL, backTargets, dragEnds, gestureNode, gridPlan, pinchPlan, tapCount, tapGoalNames, tapTarget } from "./act-direct.mjs";
 import { controlsLine, coveredControlsLine, coveredScreenLine, screenLine } from "./screen-summary.mjs";
 import { screenCover } from "./cover-check.mjs";
 import { needsOcr, ocrTargets, recognizeText, screenDiff } from "./ocr.mjs";
@@ -51,6 +51,7 @@ import {
   renewLease,
 } from "./pool.mjs";
 import { adCommandFromHost } from "./ad-command.mjs";
+import { retryDaemonStartup } from "./ad-daemon.mjs";
 import { preferDiffersFromBinding, preferHonored, SESSION_ID_RULE } from "./binding-prefer.mjs";
 import {
   SessionRegistry,
@@ -109,7 +110,7 @@ function npxAgentDevice() {
   return cachedNpxBin ?? "npx";
 }
 
-function spawnAd(argv, { json = false, timeoutMs = 120000 } = {}) {
+function spawnAdOnce(argv, { json = false, timeoutMs = 120000 } = {}) {
   const cmd = adCommand();
   const full = json ? [...argv, "--json"] : argv;
   const base = cmd[0];
@@ -142,6 +143,8 @@ function spawnAd(argv, { json = false, timeoutMs = 120000 } = {}) {
     });
   });
 }
+
+const spawnAd = (argv, opts) => retryDaemonStartup(() => spawnAdOnce(argv, opts));
 
 function usePool() {
   if (process.env.SIM_EYES_USE_POOL === "0") return false;
@@ -421,6 +424,8 @@ const BACK_SETTLE_QUIET_MS = 150;
  */
 async function pressPoint(target) {
   const args = ["press", String(target.x), String(target.y)];
+  // One device call sends both touches back to back (iOS needs the second within ~0.3 s); two steps are 1.5-4 s apart.
+  if (target.double) args.push("--double-tap");
   if (!ctx.quickTap) args.push("--settle", ...(backTargets([target]).length ? ["--settle-quiet", String(BACK_SETTLE_QUIET_MS)] : []));
   await runAd(args);
 }
@@ -466,7 +471,7 @@ async function readTapEffect(target, before) {
  */
 async function measureTap(target, before) {
   const effect = await readTapEffect(target, before);
-  if (effect.screenChanged || target.exact || target.ocr || target.text || target.selected) return effect;
+  if (effect.screenChanged || target.exact || target.ocr || target.text || target.selected || target.double) return effect;
   const moved = { ...target, x: target.x + NUDGE_POINTS, y: target.y + NUDGE_POINTS };
   await pressPoint(moved);
   const retry = await readTapEffect(moved, before);
@@ -821,14 +826,38 @@ async function actOn(instruction, args) {
 }
 
 /** The `tap_at` step: tap this exact point, for what has no label (a photo in the picker, a checkbox) or sits outside the controls (dismissing a menu). */
-async function tapAtStep(args) {
+async function tapAtStep(args, double = false) {
   const x = Number(args.x);
   const y = Number(args.y);
   if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('tap_at needs x and y: a point in points, e.g. {"tool":"tap_at","x":60,"y":780}.');
   await snapshotTargets(); // reads the screen size
   const { width, height } = ctx.screenSize;
   if (x < 0 || y < 0 || x > width || y > height) throw new Error(`tap_at (${x}, ${y}) is outside the ${width}x${height} screen.`);
-  return directTapStep(`tap_at (${x}, ${y})`, { n: 0, label: `point (${x}, ${y})`, x, y, exact: true });
+  const target = { n: 0, label: `point (${x}, ${y})`, x, y, exact: true };
+  return directTapStep(`${double ? "double_tap" : "tap_at"} (${x}, ${y})`, double ? { ...target, double: true } : target);
+}
+
+/** The `tap_at` step: one tap, or a double tap with count 2. Any other count is refused, never ignored. */
+const tapAtCountStep = (args) => tapAtStep(args, tapCount(args, "tap_at") === 2);
+
+/** The `double_tap` step: both taps in one device call, at a label (as `tap`) or a point (as `tap_at`). No goal fallback: a goal would tap once. */
+async function doubleTapStep(args) {
+  tapCount(args, "double_tap");
+  if (args.label == null) return tapAtStep(args, true);
+  const { targets, nodes } = await tappable();
+  const target = tapTarget({ label: args.label, nth: args.nth }, targets, nodes);
+  return directTapStep(`double_tap ${quoted(target.label)}`, { ...target, double: true });
+}
+
+/**
+ * The `tap_grid` step: many points in ONE agent-device request (its `batch`), for a Photos picker or any grid where each
+ * cell is a toggle. One tap_at per cell costs a screenshot and a diff each; this reads the screen once, after the last tap.
+ */
+async function tapGridStep(args) {
+  await snapshotTargets(); // reads the screen size
+  const { points, what } = gridPlan(args, ctx.screenSize);
+  const steps = points.map((p) => ({ command: "press", input: { target: { kind: "point", x: p.x, y: p.y } } }));
+  return measuredGesture("tap_grid", what, () => runAd(["batch", "--steps", JSON.stringify(steps), "--on-error", "stop"], { timeoutMs: 60000 + points.length * 3000 }));
 }
 
 /** What a step may tap right now: the tree's controls, or the screenshot's text when a view outside the app covers the screen. */
@@ -944,7 +973,9 @@ async function goalStep(args) {
 /** Steps that drive the screen, each carried out by code except `goal`. */
 const SCREEN_STEPS = {
   tap: tapStep,
-  tap_at: tapAtStep,
+  tap_at: tapAtCountStep,
+  double_tap: doubleTapStep,
+  tap_grid: tapGridStep,
   back: backStep,
   scroll: scrollStep,
   swipe: swipeStep,
@@ -1014,6 +1045,8 @@ Each step is one object: { "tool": <step>, ...args }.
 | --- | --- | --- |
 | tap | You know the control's exact label (also a list row's exact title) | label (exact, case aside; a near match is never taken); nth (1-based, top to bottom; only when several controls share the label on screen right now, as the error lists them. A dialog replaces the screen: its Delete is the only Delete, so no nth) |
 | tap_at | A point no control names: an unlabeled control, a photo in the Photos picker, outside a popup menu to dismiss it | x, y (points, as in the controls list) |
+| double_tap | A double tap: both touches go out in one fast device call (two tap steps are seconds apart and never form one). On a photo canvas it selects an object, on a map it zooms in | label (exact, as tap) or x, y (points, as tap_at); nth as tap. No goal fallback. tap_at with count 2 does the same |
+| tap_grid | Many cells of a grid, one step: select 50 photos in the Photos picker, tick a column of checkboxes. Row by row from the first cell; cells that toggle are tapped once each, so pick cells that are on screen and not yet selected | x, y (centre of the first cell); dx, dy (distance between cell centres across and down); cols, rows; count (optional: stop after this many, for a last row that is not full) |
 | back | Navigate back with the screen's Back control | none |
 | scroll | Move through a list or page | direction (down shows what is below; up, left, right); times (default 1, max 10) |
 | swipe | A raw swipe (pan a map, pull, edge swipe) | from {x,y}, to {x,y} |
@@ -1160,15 +1193,20 @@ Response: one entry per step (its result, then the screen it left behind), a lin
                 tool: {
                   type: "string",
                   enum: [...STEP_TOOLS],
-                  description: "The step: tap, tap_at, back, scroll, swipe, pinch, type, key, drag, long_press, wait, look, goal, open or record. See the table in the batch description.",
+                  description: "The step: tap, tap_at, double_tap, tap_grid, back, scroll, swipe, pinch, type, key, drag, long_press, wait, look, goal, open or record. See the table in the batch description.",
                 },
                 label: {
                   type: "string",
-                  description: "tap: the exact label of the control or text to tap. long_press: the label of the element to hold.",
+                  description: "tap, double_tap: the exact label of the control or text to tap. long_press: the label of the element to hold.",
                 },
                 nth: { type: "number", description: "tap: which of several controls that share this label ON SCREEN RIGHT NOW (1-based, top to bottom, then left to right). Only when the error listed several; it does not count repeated taps in the batch." },
-                x: { type: "number", description: "tap_at, long_press: horizontal position of the point, in points. pinch: optional centre." },
-                y: { type: "number", description: "tap_at, long_press: vertical position of the point, in points. pinch: optional centre." },
+                x: { type: "number", description: "double_tap, tap_at, long_press: horizontal position of the point, in points. pinch: optional centre. tap_grid: centre of the first cell." },
+                y: { type: "number", description: "double_tap, tap_at, long_press: vertical position of the point, in points. pinch: optional centre. tap_grid: centre of the first cell." },
+                dx: { type: "number", description: "tap_grid: distance between cell centres across, in points (needed when cols > 1)." },
+                dy: { type: "number", description: "tap_grid: distance between cell centres down, in points (needed when rows > 1)." },
+                cols: { type: "number", description: "tap_grid: cells across (default 1)." },
+                rows: { type: "number", description: "tap_grid: cells down (default 1)." },
+                count: { type: "number", description: "tap_at: 1 (default) or 2 (a double tap); any other value is refused. double_tap: only 2. tap_grid: tap only the first N cells, row by row (default cols x rows, max 100)." },
                 scale: { type: "number", description: "pinch: above 1 zooms in (2 = twice as big), below 1 zooms out (0.5 = half). 0.2–5." },
                 direction: { type: "string", enum: ["down", "up", "left", "right"], description: "scroll: the way to move through the content (down shows what is below)." },
                 times: { type: "number", description: "scroll: how many swipes (default 1, max 10)." },

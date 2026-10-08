@@ -146,6 +146,19 @@ export async function deleteTest(root, project, test) {
   await rm(testPath(root, project, test), { force: true });
 }
 
+/** Deletes several tests. Checks every test exists before removing one, so a stale pick changes nothing. */
+export async function deleteTests(root, project, tests) {
+  for (const t of tests) await readTest(root, project, t).catch(() => Promise.reject(new Error(`No such test: ${t}.`)));
+  for (const t of tests) await deleteTest(root, project, t);
+  return tests.length;
+}
+
+/** Deletes a project folder with everything in it (tests, runs, suites, builds, fixtures). Only a folder with a project.json can go. */
+export async function deleteProject(root, project) {
+  await readProject(root, project);
+  await rm(projectDir(root, project), { recursive: true, force: true });
+}
+
 const runsDir = (root, project, test) => join(projectDir(root, project), "runs", assertSlug(test, "test"));
 const runDirOf = (root, project, test, stamp) => {
   if (!/^\d{8}-\d{6}(?:-\d+)?$/.test(stamp)) throw new Error(`Not a run: ${JSON.stringify(stamp)}`);

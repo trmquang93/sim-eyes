@@ -5,6 +5,7 @@
  */
 import { copyFile, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { daemonStartupFailure } from "../ad-daemon.mjs";
 import { suggestVerdict } from "./judge.mjs";
 import { leasedUdid, stepReport } from "./step-report.mjs";
 
@@ -20,9 +21,13 @@ export const startStepFor = (start) => {
   return { step: START_STEPS[start], label: START_LABELS[start] };
 };
 
+export const DAEMON_REASON = "failed: Error (COMMAND_FAILED): Failed to start daemon";
+export const SESSION_LOST_REASON = "failed: Error (SESSION_NOT_FOUND): the agent-device session was lost before the step ran";
+/** The daemon forgot the session (it restarted under the run) and says the step was never dispatched: the test can start again. */
+const sessionLost = (text) => /SESSION_NOT_FOUND/.test(text) && /"reason":\s*"ios_app_session_required"/.test(text) && /"dispatched":\s*"no"/.test(text);
 const firstLine = (text) => String(text).split("\n")[0];
 /** Why a step failed, in one line: a failed tap's first line ends with "Fell back to a goal:", which says nothing to a tester. */
-const reasonOf = (text) => firstLine(text).replace(/\s*Fell back to a goal:$/, "");
+const reasonOf = (text) => (daemonStartupFailure({ message: text }) ? DAEMON_REASON : sessionLost(text) ? SESSION_LOST_REASON : firstLine(text).replace(/\s*Fell back to a goal:$/, ""));
 const shotName = (n) => `${String(n).padStart(2, "0")}.png`;
 
 /** The screenshot file of a step, or null when the step left none. A failure that threw sends the image but never saves it. */
@@ -43,7 +48,7 @@ async function keepShot(report, file, name) {
  * @param {(p: { udid: string, appPath: string }) => Promise<void>} [p.install]
  * @param {(p: { udid: string, names: string[], bundleId?: string }) => Promise<object>} [p.fixtures] puts the test's fixture sets into the leased simulator
  * @param {(p: { file: object, udid: string, bundleId?: string, imageDir: string }) => Promise<{ suggested: string, p: number | null, detail: string, source: string, images?: string[] }>} [p.fileCheck] answers a "Check the file ..." line from the file on the simulator
- * @param {(p: { expected: string, screen: string | null, imagePath?: string | null, imagePaths?: string[] }) => Promise<{ suggested: string, p: number | null, error?: string }>} [p.judge] suggests a result for a checkpoint
+ * @param {(p: { expected: string, screen: string | null, controls?: string | null, imagePath?: string | null, imagePaths?: string[] }) => Promise<{ suggested: string, p: number | null, error?: string }>} [p.judge] suggests a result for a checkpoint
  * @param {{ backend: string, model?: string } | null} [p.judgeInfo] recorded in the run
  * @param {() => boolean} [p.shouldStop] checked before every step: true ends the run as "stopped" (the video is saved and the lease released)
  * @param {(event: object) => void} [p.onEvent] `phase`, `step-start`, `step-end`, `checkpoint`, `run-end`
@@ -79,6 +84,7 @@ export async function runTest({ test, app, build = null, runDir, call, install, 
       ok: report.ok,
       summary: report.summary,
       screen: report.screen,
+      controls: report.controls,
       shot: await keepShot(report, file, shotName(n)),
       ms: Date.now() - started,
     };
@@ -147,7 +153,7 @@ export async function runTest({ test, app, build = null, runDir, call, install, 
       n += 1;
       const record = await runStepAt(n, line.text, lineIndex, line.step);
       if (record.ok && line.expected != null) {
-        const item = { n, lineIndex, expected: line.expected, screen: record.screen, shot: record.shot };
+        const item = { n, lineIndex, expected: line.expected, screen: record.screen, controls: record.controls, shot: record.shot };
         if (line.file && fileCheck) {
           // The file is on the simulator now; the answer is code's. Pages drawn for a visual check go to the judge later.
           const out = leasedId
@@ -171,7 +177,7 @@ export async function runTest({ test, app, build = null, runDir, call, install, 
       const pictures = c.images ? { imagePaths: c.images.map((f) => join(runDir, f)) } : { imagePath: c.shot ? join(runDir, c.shot) : null };
       const out =
         c.result ??
-        (judge ? await judge({ expected: c.expected, screen: c.screen, ...pictures }) : { suggested: "unsure", p: null, error: "No judge is configured." });
+        (judge ? await judge({ expected: c.expected, screen: c.screen, controls: c.controls, ...pictures }) : { suggested: "unsure", p: null, error: "No judge is configured." });
       const checkpoint = {
         n: c.n,
         lineIndex: c.lineIndex,
@@ -182,6 +188,8 @@ export async function runTest({ test, app, build = null, runDir, call, install, 
         ...(c.images ? { images: c.images } : {}),
         ...(c.source ? { source: c.source } : {}),
         ...(c.detail ? { detail: c.detail } : {}),
+        ...(out.via ? { via: out.via } : {}),
+        ...(out.fallback ? { fallback: out.fallback } : {}),
         ...(out.error ? { error: out.error } : {}),
       };
       run.checkpoints.push(checkpoint);

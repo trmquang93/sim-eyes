@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
-import { FAIL_MIN, PASS_MIN, downscale, judgeCheckpoint, suggestVerdict, verdictOf } from "./judge.mjs";
+import { FAIL_MIN, PASS_MIN, TEXT_MIN, downscale, judgeCheckpoint, suggestVerdict, textVerdictOf, verdictOf } from "./judge.mjs";
 
 // The bars decide when a person is asked to look closer: a bar that drifts down turns guesses into suggested passes.
 assert.equal(PASS_MIN, 0.8);
@@ -29,7 +29,7 @@ const prepareImage = async (path) => `jpeg-of:${path}`;
 
 {
   const out = await judgeCheckpoint({ expected: "Trang 2 bị xóa; còn 2 trang", screen: 'title "Detail"', imagePath: "/r/03.png" }, { client: clientReturning(0.941234), prepareImage });
-  assert.deepEqual(out, { suggested: "pass", p: 0.941 });
+  assert.deepEqual(out, { suggested: "pass", p: 0.941, via: "screenshot" });
   assert.deepEqual(seen[0].images, ["jpeg-of:/r/03.png"], "the screenshot goes with the question, as base64");
   assert.deepEqual(seen[0].state, { expected: "Trang 2 bị xóa; còn 2 trang", screen: 'title "Detail"' });
   assert.deepEqual(Object.keys(seen[0].questions), ["matches"], "one yes/no question: the judge selects, it never writes");
@@ -81,5 +81,94 @@ const prepareImage = async (path) => `jpeg-of:${path}`;
   assert.equal(cmd, "sips");
   assert.deepEqual(args.slice(0, 7), ["-Z", "1280", "-s", "format", "jpeg", "-s", "formatOptions"]);
   assert.ok(args.includes("/r/01.png"));
+}
+
+// Screen text first: the verdict of a text answer needs a clear `shows` or `contradicts`; anything else is not a verdict.
+{
+  assert.equal(TEXT_MIN, 0.85);
+  const dist = (choice, probabilities) => ({ choice, probabilities: { shows: 0, contradicts: 0, "cannot tell": 0, ...probabilities } });
+  assert.deepEqual(textVerdictOf(dist("shows", { shows: 0.93, "cannot tell": 0.07 })), { suggested: "pass", p: 0.93 });
+  assert.deepEqual(textVerdictOf(dist("contradicts", { shows: 0.04, contradicts: 0.96 })), { suggested: "fail", p: 0.04 });
+  assert.equal(textVerdictOf(dist("shows", { shows: 0.84, contradicts: 0.16 })).suggested, "unsure", "a 84% shows is below the bar: the screenshot decides");
+  assert.equal(textVerdictOf(dist("contradicts", { contradicts: 0.7, "cannot tell": 0.3 })).suggested, "unsure");
+  const blind = textVerdictOf(dist("cannot tell", { "cannot tell": 0.99 }));
+  assert.equal(blind.suggested, "unsure", "a text that does not carry the answer never decides, however sure it is of that");
+  assert.match(blind.why, /does not carry/);
+  assert.equal(textVerdictOf(undefined).suggested, "unsure");
+  assert.equal(textVerdictOf({ choice: "shows" }).suggested, "unsure");
+}
+
+const SCREEN = 'screen: "Files" · alert "Delete page 2?" | texts: Delete page 2? / This cannot be undone / Cancel / Delete';
+const textClientReturning = (choice, probabilities) => ({
+  calls: [],
+  async systemOne(req) {
+    this.calls.push(req);
+    return { answers: { screen: { type: "choice", choice, confidence: 0.9, probabilities: { shows: 0, contradicts: 0, "cannot tell": 0, ...probabilities } } } };
+  },
+});
+const visionSeen = () => seen.length;
+
+// A clear text answer settles the checkpoint without a picture: nothing is downscaled and the vision judge is never called.
+{
+  const text = textClientReturning("shows", { shows: 0.96, "cannot tell": 0.04 });
+  const before = visionSeen();
+  let prepared = 0;
+  const out = await judgeCheckpoint({ expected: "A confirmation asks to delete page 2", screen: SCREEN, controls: "controls (2): Cancel · Delete", imagePath: "/r/9.png" }, { client: clientReturning(0.1), textClient: text, prepareImage: async () => (prepared += 1, "x") });
+  assert.deepEqual(out, { suggested: "pass", p: 0.96, via: "screen" });
+  assert.equal(visionSeen(), before, "the screenshot judge is not asked when the text is clear");
+  assert.equal(prepared, 0, "no screenshot is read either");
+  assert.deepEqual(text.calls[0].state, { expected: "A confirmation asks to delete page 2", screen: SCREEN, controls: "controls (2): Cancel · Delete" });
+  assert.equal(text.calls[0].images, undefined, "the text judge is given no picture");
+  assert.deepEqual(Object.keys(text.calls[0].questions), ["screen"]);
+  const fail = await judgeCheckpoint({ expected: "No confirmation is shown", screen: SCREEN, imagePath: "/r/9.png" }, { client: clientReturning(0.9), textClient: textClientReturning("contradicts", { shows: 0.03, contradicts: 0.97 }), prepareImage });
+  assert.deepEqual([fail.suggested, fail.via], ["fail", "screen"]);
+}
+
+// Every way the text can fail to settle it falls back to the screenshot, and the verdict says why, so a person can see which judge decided.
+{
+  const cases = [
+    ["cannot tell", textClientReturning("cannot tell", { "cannot tell": 0.9 }), SCREEN, /does not carry/],
+    ["low probability", textClientReturning("shows", { shows: 0.6, contradicts: 0.4 }), SCREEN, /not clear enough/],
+    ["the text judge throws", { systemOne: async () => { throw new Error("503"); } }, SCREEN, /text judge failed: 503/],
+    ["the answer is unreadable", { systemOne: async () => ({ answers: {} }) }, SCREEN, /unreadable/],
+    ["no screen description", textClientReturning("shows", { shows: 0.99 }), null, /no usable screen description/],
+    ["an empty description", textClientReturning("shows", { shows: 0.99 }), "screen: (no title)", /no usable screen description/],
+  ];
+  for (const [name, textClient, screen, why] of cases) {
+    const before = visionSeen();
+    const out = await judgeCheckpoint({ expected: "x", screen, imagePath: "/r/9.png" }, { client: clientReturning(0.95), textClient, prepareImage });
+    assert.equal(out.suggested, "pass", `${name}: the screenshot judge answers`);
+    assert.equal(out.via, "screenshot", name);
+    assert.match(out.fallback, why, name);
+    assert.equal(visionSeen(), before + 1, `${name}: exactly one screenshot call`);
+  }
+  const ocr = textClientReturning("contradicts", { shows: 0.02, contradicts: 0.98 });
+  const covered = await judgeCheckpoint({ expected: "không có kết quả", screen: "screen: covered by a view outside the app's accessibility tree (a system picker or permission sheet) | texts (read from the screenshot): ReadJny / Cancel / ReadJny_Docurnent.docK", imagePath: "/r/9.png" }, { client: clientReturning(0.95), textClient: ocr, prepareImage });
+  assert.equal(ocr.calls.length, 0, "OCR of a covered screen is not evidence the text judge may fail a checkpoint on");
+  assert.deepEqual([covered.suggested, covered.via], ["pass", "screenshot"]);
+  const empty = textClientReturning("shows", { shows: 0.99 });
+  await judgeCheckpoint({ expected: "x", screen: "screen: (no title)", imagePath: "/r/9.png" }, { client: clientReturning(0.95), textClient: empty, prepareImage });
+  assert.equal(empty.calls.length, 0, "an empty description is not sent to the model");
+}
+
+// The pages of a file are pictures: the text stage is skipped and the pages go to the screenshot judge as before.
+{
+  const text = textClientReturning("shows", { shows: 0.99 });
+  const out = await judgeCheckpoint({ expected: "page 1 red", screen: SCREEN, imagePaths: ["/r/p1.jpg", "/r/p2.jpg"] }, { client: clientReturning(0.97), textClient: text, prepareImage });
+  assert.equal(text.calls.length, 0);
+  assert.deepEqual([out.suggested, out.via, out.fallback], ["pass", "screenshot", undefined]);
+}
+
+// Text alone, with no screenshot judge: a clear text answer still counts, an unclear one is "unsure" with both reasons, never a guess.
+{
+  const clear = await judgeCheckpoint({ expected: "x", screen: SCREEN, imagePath: "/r/9.png" }, { client: null, textClient: textClientReturning("shows", { shows: 0.95 }), prepareImage });
+  assert.deepEqual([clear.suggested, clear.via], ["pass", "screen"]);
+  const unclear = await judgeCheckpoint({ expected: "x", screen: SCREEN, imagePath: "/r/9.png" }, { client: null, textClient: textClientReturning("cannot tell", { "cannot tell": 0.9 }), prepareImage });
+  assert.deepEqual([unclear.suggested, unclear.p], ["unsure", null]);
+  assert.match(unclear.fallback, /does not carry/);
+  assert.match(unclear.error, /No judge/);
+  const noShot = await judgeCheckpoint({ expected: "x", screen: SCREEN, imagePath: null }, { client: clientReturning(0.95), textClient: textClientReturning("cannot tell", { "cannot tell": 0.9 }), prepareImage });
+  assert.equal(noShot.suggested, "unsure");
+  assert.equal(noShot.via, undefined, "no picture, so the screenshot judge did not decide");
 }
 console.log("test-judge: ok");

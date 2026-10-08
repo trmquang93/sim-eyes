@@ -42,3 +42,13 @@
 {"image": "photo-viewer.jpg", "expected": "The photo viewer shows a green picture with the letter B", "want": "pass"}
 {"image": "photo-viewer.jpg", "expected": "The letter B fills most of the screen", "want": "fail"}
 {"image": "photo-viewer-zoomed.jpg", "expected": "The picture is zoomed in so the letter B is very large", "want": "pass"}
+{"image": "picker-empty.jpg", "expected": "thư viện ảnh được mở", "want": "pass"}
+{"image": "picker-empty.jpg", "expected": "không hiển thị yêu cầu quyền truy cập ảnh riêng của app", "want": "pass"}
+{"image": "picker-empty.jpg", "expected": "không có ảnh nào được chọn", "want": "pass"}
+{"image": "picker-empty.jpg", "expected": "Done không hoạt động", "want": "pass"}
+{"image": "picker-empty.jpg", "expected": "Done chuyển sang hoạt động", "want": "fail"}
+{"image": "picker-empty.jpg", "expected": "App hiển thị hộp thoại xin quyền truy cập ảnh (Allow / Don't Allow)", "want": "fail"}
+{"image": "picker-selected.jpg", "expected": "ảnh được chọn", "want": "pass"}
+{"image": "picker-selected.jpg", "expected": "Done chuyển sang hoạt động", "want": "pass"}
+{"image": "picker-selected.jpg", "expected": "Done không hoạt động", "want": "fail"}
+{"image": "picker-selected.jpg", "expected": "không có ảnh nào được chọn", "want": "fail"}

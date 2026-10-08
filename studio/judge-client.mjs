@@ -17,6 +17,10 @@ export const OPENROUTER_URL = "https://openrouter.ai/api/alpha";
 /** A call takes about a second; this only ends one that hangs. */
 export const JUDGE_TIMEOUT_MS = 60_000;
 const MAX_QUESTIONS = 64;
+/** Runs judged together (a parallel suite) can burst past the provider's rate limit; a 429 is asked again this many times. */
+export const RATE_LIMIT_RETRIES = 3;
+const RETRY_BASE_MS = 2000;
+const RETRY_MAX_MS = 20_000;
 
 export class JudgeError extends Error {
   constructor(message, { status } = {}) {
@@ -47,8 +51,15 @@ export function decisionsBody(request) {
   return { model: JUDGE_MODEL, state, questions: request.questions };
 }
 
+/** How long to wait before asking again after a 429: the provider's `Retry-After` seconds when it sends them, else doubling from 2 s, never more than 20 s. */
+export function retryDelayMs(retryAfter, attempt) {
+  const seconds = Number(retryAfter);
+  const wanted = retryAfter != null && Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : RETRY_BASE_MS * 2 ** attempt;
+  return Math.min(wanted, RETRY_MAX_MS);
+}
+
 /** A client with `systemOne(request)` that answers like the TypeSafe SDK. `fetch` is injectable for tests. */
-export function judgeClient({ env = process.env, fetch = globalThis.fetch, timeoutMs = JUDGE_TIMEOUT_MS } = {}) {
+export function judgeClient({ env = process.env, fetch = globalThis.fetch, timeoutMs = JUDGE_TIMEOUT_MS, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
   const config = judgeConfig(env);
   if (!config) return null;
   return {
@@ -58,18 +69,23 @@ export function judgeClient({ env = process.env, fetch = globalThis.fetch, timeo
       const names = Object.keys(request?.questions ?? {});
       if (!names.length || names.length > MAX_QUESTIONS) throw new JudgeError(`A request needs 1 to ${MAX_QUESTIONS} questions, not ${names.length}.`);
       let response;
-      try {
-        response = await fetch(`${config.baseURL}/decisions`, {
-          method: "POST",
-          headers: { authorization: `Bearer ${config.apiKey}`, "content-type": "application/json", accept: "application/json" },
-          body: JSON.stringify(decisionsBody(request)),
-          signal: AbortSignal.timeout(timeoutMs),
-        });
-      } catch (err) {
-        const why = err.name === "TimeoutError" ? `no answer in ${Math.round(timeoutMs / 1000)} s` : "connection failed";
-        throw new JudgeError(`The judge is unreachable through ${config.via} (${why}).`);
+      let text;
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          response = await fetch(`${config.baseURL}/decisions`, {
+            method: "POST",
+            headers: { authorization: `Bearer ${config.apiKey}`, "content-type": "application/json", accept: "application/json" },
+            body: JSON.stringify(decisionsBody(request)),
+            signal: AbortSignal.timeout(timeoutMs),
+          });
+        } catch (err) {
+          const why = err.name === "TimeoutError" ? `no answer in ${Math.round(timeoutMs / 1000)} s` : "connection failed";
+          throw new JudgeError(`The judge is unreachable through ${config.via} (${why}).`);
+        }
+        text = await response.text();
+        if (response.status !== 429 || attempt >= RATE_LIMIT_RETRIES) break;
+        await sleep(retryDelayMs(response.headers?.get?.("retry-after"), attempt));
       }
-      const text = await response.text();
       let body;
       try {
         body = text ? JSON.parse(text) : undefined;

@@ -86,6 +86,19 @@ export function tapTarget({ label, nth } = {}, targets, nodes = []) {
   return found[0];
 }
 
+/** How many taps a `tap_at` / `double_tap` step makes: 1 or 2 (`double_tap` is always 2). Any other `count` is refused, never ignored. */
+export function tapCount(args, tool) {
+  const wanted = tool === "double_tap" ? 2 : 1;
+  if (args.count == null) return wanted;
+  const count = Number(args.count);
+  if (count === wanted || (tool === "tap_at" && count === 2)) return count;
+  throw new Error(
+    tool === "double_tap"
+      ? `double_tap is always two taps; count ${JSON.stringify(args.count)} is not accepted. Leave count out (or 2).`
+      : `tap_at count must be 1 or 2 (2 = double tap), not ${JSON.stringify(args.count)}. For a grid of cells use tap_grid.`
+  );
+}
+
 const area = (n) => n.rect.width * n.rect.height;
 /** A point inside one of these names the container, not an item in it: a drag from there grabs nothing. */
 const CONTAINER_TYPES = new Set(["ScrollView", "CollectionView", "Table", "Other", "NavigationBar", "WebView"]);
@@ -163,4 +176,39 @@ export function pinchPlan(args) {
   const centre = hasCentre ? [Math.round(Number(args.x)), Math.round(Number(args.y))] : [];
   if (hasCentre && (args.x == null || args.y == null || centre.some((v) => !Number.isFinite(v)))) throw new Error("pinch: pass both x and y as numbers (points), or neither.");
   return { scale, centre, what: `pinched ${scale > 1 ? "open (zoom in)" : "closed (zoom out)"} by ${scale}${centre.length ? ` around (${centre[0]}, ${centre[1]})` : ""}` };
+}
+
+/** Most points one `tap_grid` step taps: a Photos picker caps a selection near this, and a runaway grid is a mistake. */
+export const GRID_MAX = 100;
+
+/**
+ * The `tap_grid` step's arguments: `{ points, what }`, row by row from the first cell (x, y) with `dx` across and `dy` down.
+ * `count` stops early, for a last row that is not full (50 photos in a grid of 5 columns).
+ */
+export function gridPlan(args, screen) {
+  const num = (v) => (v == null || v === "" ? NaN : Number(v));
+  const x = num(args.x);
+  const y = num(args.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('tap_grid needs x and y: the centre of the first cell, e.g. {"tool":"tap_grid","x":44,"y":168,"dx":88,"dy":88,"cols":5,"rows":8}.');
+  const whole = (v, name, fallback) => {
+    const n = v == null ? fallback : num(v);
+    if (!Number.isInteger(n) || n < 1) throw new Error(`tap_grid: ${name} must be a whole number of at least 1.`);
+    return n;
+  };
+  const cols = whole(args.cols, "cols", 1);
+  const rows = whole(args.rows, "rows", 1);
+  const count = whole(args.count, "count", cols * rows);
+  if (count > cols * rows) throw new Error(`tap_grid: count ${count} is more than cols x rows (${cols * rows}).`);
+  if (count > GRID_MAX) throw new Error(`tap_grid: ${count} taps is more than the ${GRID_MAX} one step may tap. Split it into several tap_grid steps.`);
+  const dx = args.dx == null ? 0 : num(args.dx);
+  const dy = args.dy == null ? 0 : num(args.dy);
+  if (!Number.isFinite(dx) || !Number.isFinite(dy)) throw new Error("tap_grid: dx and dy must be numbers (points between cell centres).");
+  if ((cols > 1 && dx === 0) || (rows > 1 && dy === 0)) throw new Error("tap_grid: several cols need dx, several rows need dy (the distance between cell centres, in points). Otherwise every tap lands on the same cell and toggles it.");
+  const points = [];
+  for (let r = 0; r < rows && points.length < count; r++) {
+    for (let c = 0; c < cols && points.length < count; c++) points.push({ x: Math.round(x + c * dx), y: Math.round(y + r * dy) });
+  }
+  const out = points.find((p) => p.x < 0 || p.y < 0 || p.x > screen.width || p.y > screen.height);
+  if (out) throw new Error(`tap_grid: (${out.x}, ${out.y}) is outside the ${screen.width}x${screen.height} screen.`);
+  return { points, what: `tapped ${points.length} points (${cols} across, ${rows} down) from (${points[0].x}, ${points[0].y}) to (${points[points.length - 1].x}, ${points[points.length - 1].y})` };
 }

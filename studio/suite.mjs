@@ -35,40 +35,99 @@ export function planItems(tests) {
   });
 }
 
+const DAEMON_DOWN = /Failed to start daemon|the agent-device session was lost before the step ran/;
+
+/** How many tests one suite may run at once: each takes a simulator of its own, so a few is already a lot. */
+export const MAX_CONCURRENCY = 6;
+
+/** The width a request asks for: a whole number from 1 to `MAX_CONCURRENCY`, 1 when nothing is asked. */
+export function parseConcurrency(value) {
+  if (value == null || value === "") return 1;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1 || n > MAX_CONCURRENCY) throw new Error(`Run 1 to ${MAX_CONCURRENCY} tests at a time.`);
+  return n;
+}
+
 /**
  * @param {object} p
  * @param {object[]} p.tests the selected tests, from `expandSelector`
  * @param {(slug: string) => Promise<{ stamp: string, status: string, suggestedVerdict?: string, reason?: string }>} p.runOne
+ * @param {number} [p.concurrency] tests going at once, each on its own simulator. When the pool runs out of simulators while
+ *   others are still going, the test waits for one of them and the width shrinks to what the pool could give.
  * @param {(suite: object) => Promise<void>} [p.save] called after every change, so a crash keeps the progress
- * @param {() => boolean} [p.shouldStop] checked between tests
+ * @param {() => Promise<void>} [p.warmUp] awaited once before the first test starts when tests run in parallel: the clients of N
+ *   tests started together would each try to start agent-device's daemon and lose the race. A failure is reported (`warm-up-failed`), never fatal.
+ * @param {() => Promise<void>} [p.recover] called when a run failed because agent-device's daemon could not start (daemon down mid-suite):
+ *   one call at a time however many runs fail together, then each of those tests runs once more from the start. A second daemon failure stays failed.
+ * @param {() => boolean} [p.shouldStop] checked before each test starts
  * @param {(event: object) => void} [p.onEvent] `item-start`, `item-end`
  */
-export async function runSuite({ tests, selector, runOne, save = async () => {}, shouldStop = () => false, onEvent = () => {}, now = () => new Date() }) {
+export async function runSuite({ tests, selector, runOne, concurrency = 1, save = async () => {}, warmUp = async () => {}, recover = async () => {}, shouldStop = () => false, onEvent = () => {}, now = () => new Date() }) {
   const suite = { selector, status: "running", startedAt: now().toISOString(), items: planItems(tests) };
-  await save(suite);
-  for (const item of suite.items) {
-    if (item.state !== "pending") continue;
-    if (shouldStop() || suite.status !== "running") {
-      Object.assign(item, { state: "not-run", reason: suite.status === "inconclusive" ? "pool-busy" : "stopped" });
-      continue;
-    }
-    item.state = "running";
-    onEvent({ type: "item-start", test: item.test });
-    await save(suite);
-    try {
-      const run = await runOne(item.test);
-      Object.assign(item, { state: "done", runStamp: run.stamp, status: run.status, ...(run.suggestedVerdict ? { suggestedVerdict: run.suggestedVerdict } : {}), ...(run.reason ? { reason: run.reason } : {}) });
-      // A busy pool is not the app's fault and the next test would be just as busy: end here, never take another lease.
-      if (run.status === "inconclusive") suite.status = "inconclusive";
-      if (run.status === "stopped") suite.status = "stopped";
-    } catch (err) {
-      Object.assign(item, { state: "error", reason: err.message });
-    }
-    onEvent({ type: "item-end", ...item });
-    await save(suite);
-  }
+  // Parallel tests write progress at the same time: one save at a time, so suite.json is never two writes mixed.
+  let saving = Promise.resolve();
+  const saveNow = () => (saving = saving.then(() => save(suite)));
+  await saveNow();
+
+  const waiting = suite.items.filter((i) => i.state === "pending");
+  if (concurrency > 1 && waiting.length > 1) await warmUp().catch((err) => onEvent({ type: "warm-up-failed", reason: err.message }));
+  let recovering = null;
+  const recoverOnce = () => (recovering ??= recover().catch(() => {}).finally(() => (recovering = null)));
+  const daemonDown = (run) => run.status === "failed" && DAEMON_DOWN.test(run.reason ?? "");
+  let width = Math.max(1, concurrency);
+  let going = 0;
+  await new Promise((resolve) => {
+    const pump = () => {
+      while (waiting.length && going < width) {
+        if (shouldStop() || suite.status !== "running") {
+          for (const item of waiting.splice(0)) Object.assign(item, { state: "not-run", reason: suite.status === "inconclusive" ? "pool-busy" : "stopped" });
+          break;
+        }
+        launch(waiting.shift());
+      }
+      if (!going && !waiting.length) resolve();
+    };
+    const launch = (item) => {
+      going += 1;
+      item.state = "running";
+      onEvent({ type: "item-start", test: item.test });
+      (async () => {
+        await saveNow();
+        try {
+          let run = await runOne(item.test);
+          if (daemonDown(run) && suite.status === "running") {
+            onEvent({ type: "item-retry", test: item.test, reason: run.reason });
+            await recoverOnce();
+            run = await runOne(item.test);
+          }
+          if (run.status === "inconclusive" && going > 1 && suite.status === "running") {
+            // The pool had no simulator for this one, but the tests going hold some: wait for them and ask again.
+            Object.keys(item).forEach((k) => !["test", "id", "name"].includes(k) && delete item[k]);
+            item.state = "pending";
+            waiting.unshift(item);
+            width = going - 1;
+            return;
+          }
+          Object.assign(item, { state: "done", runStamp: run.stamp, status: run.status, ...(run.suggestedVerdict ? { suggestedVerdict: run.suggestedVerdict } : {}), ...(run.reason ? { reason: run.reason } : {}) });
+          // A busy pool with nothing else going is not the app's fault and the next test would be just as busy: end here, never take another lease.
+          if (run.status === "inconclusive") suite.status = "inconclusive";
+          if (run.status === "stopped") suite.status = "stopped";
+        } catch (err) {
+          Object.assign(item, { state: "error", reason: err.message });
+        }
+        if (item.state !== "pending") onEvent({ type: "item-end", ...item });
+      })()
+        .then(saveNow)
+        .finally(() => {
+          going -= 1;
+          pump();
+        });
+    };
+    pump();
+  });
+
   if (suite.status === "running") suite.status = shouldStop() ? "stopped" : "completed";
   suite.endedAt = now().toISOString();
-  await save(suite);
+  await saveNow();
   return suite;
 }

@@ -144,6 +144,22 @@ video { width: 100%; max-width: 360px; border-radius: var(--radius); background:
 .suite-table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); margin-top: 12px; }
 .suite-table th, .suite-table td { text-align: left; padding: 8px 12px; border-top: 1px solid var(--line); vertical-align: top; }
 .suite-table th { color: var(--muted); font-weight: 600; font-size: 13px; border-top: 0; }
+.live-step { margin-top: 6px; }
+.live-step img { height: 220px; width: auto; border: 1px solid var(--line); border-radius: 6px; display: block; margin-top: 4px; cursor: zoom-in; }
+.verdict-actions { margin-top: 8px; }
+.verdict-actions .row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.verdict-actions button { padding: 4px 12px; }
+.verdict-actions button.chosen.verdict-pass { background: var(--good); border-color: var(--good); color: #fff; font-weight: 600; }
+.verdict-actions button.chosen.verdict-fail { background: var(--bad); border-color: var(--bad); color: #fff; font-weight: 600; }
+@media (prefers-color-scheme: dark) { .verdict-actions button.chosen { color: #0b1220; } }
+.review { margin-top: 8px; display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+.review figure { margin: 0; }
+.review img, .review video { height: 260px; width: auto; max-width: 100%; border: 1px solid var(--line); border-radius: 6px; display: block; }
+.review img { cursor: zoom-in; }
+.review figcaption { margin-top: 4px; }
+.expectations { flex: 1 1 260px; min-width: 0; }
+.expectations ul { margin: 4px 0 0; padding-left: 18px; }
+.expectations li { margin-bottom: 6px; }
 .suite-row.skipped td, .suite-row.not-run td { color: var(--muted); }
 .inline.form { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
 .inline.form .field.grow { flex: 1; min-width: 160px; }
@@ -162,5 +178,6 @@ video { width: 100%; max-width: 360px; border-radius: var(--radius); background:
 .move-bar input[type=text] { flex: 1; min-width: 220px; }
 
 .settings-link { margin-left: auto; color: inherit; }
+.settings-nav { margin-left: 16px; color: inherit; }
 .choice { display: flex; gap: 10px; align-items: flex-start; padding: 6px 0; }
 .choice input { margin-top: 4px; }

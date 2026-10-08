@@ -162,6 +162,45 @@ try {
   assert.match((await dmg.json()).error, /Drop a simulator \.app/);
   assert.equal((await call("PUT", "/api/projects/settings-qa/build", { id: "nope" })).status, 404);
 
+  // Running list: empty when idle; a suite shows the test going now and the ones still waiting, and empties when it ends.
+  assert.deepEqual((await call("GET", "/api/running")).data, { run: null, runs: [], suite: null });
+  await call("POST", "/api/projects/settings-qa/tests", { name: "Open Wi-Fi" });
+  await call("PUT", "/api/projects/settings-qa/tests/open-wi-fi", { name: "Open Wi-Fi", start: "relaunch", lines: ['Tap "Wi-Fi"'] });
+  gate = new Promise((r) => (release = r));
+  const suiteStart = await call("POST", "/api/projects/settings-qa/suites", { selector: { tests: ["open-about", "open-wi-fi"] } });
+  const going = await waitFor(async () => {
+    const r = (await call("GET", "/api/running")).data;
+    return r.run && r.suite?.items.length === 2 ? r : null;
+  });
+  assert.deepEqual([going.run.project, going.run.test, going.run.name], ["settings-qa", "open-wi-fi", "Open Wi-Fi"], "a suite runs tests without a case ID first");
+  assert.deepEqual([going.suite.project, going.suite.stamp], ["settings-qa", suiteStart.data.stamp]);
+  assert.deepEqual(going.suite.items.map((i) => [i.test, i.state]), [["open-wi-fi", "running"], ["open-about", "pending"]], "the second test waits");
+  release();
+  await waitFor(async () => (await call("GET", "/api/status")).data.activeSuite === null);
+  assert.deepEqual((await call("GET", "/api/running")).data, { run: null, runs: [], suite: null });
+
+  // Delete tests in a batch and a whole project. A stale pick changes nothing; a project with a run going is kept.
+  await call("POST", "/api/projects", { name: "Scratch" });
+  for (const n of ["One", "Two", "Three"]) await call("POST", "/api/projects/scratch/tests", { name: n });
+  assert.equal((await call("DELETE", "/api/projects/scratch/tests", { tests: [] })).status, 400, "an empty pick is refused");
+  assert.equal((await call("DELETE", "/api/projects/scratch/tests", { tests: ["one", "nope"] })).status, 404);
+  assert.equal((await call("GET", "/api/projects/scratch/tests")).data.length, 3, "nothing was deleted when one pick was missing");
+  assert.equal((await call("DELETE", "/api/projects/scratch/tests", { tests: ["one", "two"] })).data.deleted, 2);
+  assert.deepEqual((await call("GET", "/api/projects/scratch/tests")).data.map((t) => t.slug), ["three"]);
+  gate = new Promise((r) => (release = r));
+  const held = await call("POST", "/api/projects/settings-qa/tests/open-about/run");
+  assert.equal((await call("DELETE", "/api/projects/settings-qa/tests", { tests: ["open-about"] })).status, 409, "a test with a run going is kept");
+  assert.equal((await call("DELETE", "/api/projects/settings-qa")).status, 409, "a project with a run going is kept");
+  assert.equal((await call("DELETE", "/api/projects/scratch")).status, 200, "another project can go while a run is going");
+  release();
+  await waitFor(async () => (await call("GET", "/api/status")).data.activeRun === null);
+  assert.ok(held.data.stamp);
+  assert.deepEqual((await call("GET", "/api/projects")).data.map((x) => x.slug), ["settings-qa"]);
+  assert.ok(!existsSync(join(root, "scratch")), "the project folder is gone");
+  assert.equal((await call("DELETE", "/api/projects/scratch")).status, 404, "deleting a project twice is not found");
+  assert.equal((await call("DELETE", "/api/projects/settings-qa")).status, 200);
+  assert.ok(!existsSync(join(root, "settings-qa")));
+
   // The page is served.
   assert.match((await get("/")).body, /sim-eyes Studio/);
   assert.equal((await get("/server.mjs")).status, 404);
