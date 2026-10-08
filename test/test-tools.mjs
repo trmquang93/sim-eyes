@@ -73,6 +73,9 @@ try {
   assert.equal(batch.inputSchema.properties.app.type, "string");
   assert.equal(step.relaunch.type, "boolean");
   assert.match(acquire.description, /never hands you a different one silently/);
+  // A phone is chosen only by asking for it; the default stays a simulator so an agent cannot land on hardware by accident.
+  assert.deepEqual(acquire.inputSchema.properties.target.enum, ["simulator", "device"]);
+  assert.match(acquire.description, /physical iPhone/);
 
   const statusTool = tools.find((t) => t.name === "status");
   assert.deepEqual(statusTool.inputSchema.required, ["session_id"]);

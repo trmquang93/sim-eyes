@@ -1,0 +1,308 @@
+{
+  "success": true,
+  "data": {
+    "nodes": [
+      {
+        "hittable": false,
+        "depth": 0,
+        "type": "Application",
+        "enabled": true,
+        "rect": {
+          "x": 0,
+          "width": 393,
+          "y": 0,
+          "height": 852
+        },
+        "label": "Settings",
+        "index": 0,
+        "ref": "e1",
+        "kind": "application"
+      },
+      {
+        "hittable": true,
+        "depth": 2,
+        "parentIndex": 0,
+        "type": "NavigationBar",
+        "enabled": true,
+        "identifier": "General",
+        "rect": {
+          "x": 0,
+          "width": 393,
+          "y": 59,
+          "height": 54
+        },
+        "label": "Settings",
+        "index": 1,
+        "ref": "e2",
+        "kind": "navigation-bar"
+      },
+      {
+        "hittable": true,
+        "depth": 3,
+        "parentIndex": 1,
+        "type": "Button",
+        "enabled": true,
+        "identifier": "BackButton",
+        "rect": {
+          "x": 16,
+          "width": 44,
+          "y": 59,
+          "height": 44
+        },
+        "label": "Settings",
+        "index": 2,
+        "ref": "e3",
+        "kind": "button"
+      },
+      {
+        "hittable": true,
+        "depth": 3,
+        "parentIndex": 1,
+        "type": "StaticText",
+        "enabled": true,
+        "rect": {
+          "x": 165.33333333333334,
+          "width": 62,
+          "y": 69.66666666666666,
+          "height": 22.66666666666667
+        },
+        "label": "General",
+        "index": 3,
+        "ref": "e4",
+        "kind": "text"
+      },
+      {
+        "hittable": true,
+        "depth": 3,
+        "parentIndex": 0,
+        "type": "Other",
+        "enabled": true,
+        "rect": {
+          "x": 0,
+          "width": 393,
+          "y": 113,
+          "height": 705
+        },
+        "label": "About",
+        "index": 4,
+        "ref": "e5",
+        "kind": "other"
+      },
+      {
+        "hittable": true,
+        "depth": 4,
+        "parentIndex": 4,
+        "type": "Table",
+        "enabled": true,
+        "rect": {
+          "x": 0,
+          "width": 393,
+          "y": 113,
+          "height": 684
+        },
+        "label": "General",
+        "index": 5,
+        "hiddenContentBelow": true,
+        "ref": "e6",
+        "kind": "table"
+      },
+      {
+        "hittable": true,
+        "depth": 5,
+        "parentIndex": 5,
+        "type": "Cell",
+        "enabled": true,
+        "identifier": "PLACARD",
+        "rect": {
+          "x": 16,
+          "width": 361,
+          "y": 130.6666660308838,
+          "height": 232.6666717529297
+        },
+        "label": "General",
+        "index": 6,
+        "ref": "e7",
+        "kind": "cell"
+      },
+      {
+        "hittable": true,
+        "depth": 6,
+        "parentIndex": 6,
+        "type": "Other",
+        "enabled": true,
+        "rect": {
+          "x": 16,
+          "width": 361,
+          "y": 130.6666660308838,
+          "height": 232.6666717529297
+        },
+        "label": "General",
+        "index": 7,
+        "ref": "e8",
+        "kind": "other"
+      },
+      {
+        "rect": {
+          "x": 32,
+          "width": 329,
+          "y": 253.50000190734863,
+          "height": 94.33333333333331
+        },
+        "enabled": true,
+        "index": 8,
+        "label": "Manage your overall setup and preferences for iPhone, such as software updates, device language, CarPlay, AirDrop, and more.",
+        "hittable": true,
+        "depth": 7,
+        "parentIndex": 7,
+        "type": "StaticText",
+        "ref": "e9",
+        "kind": "text"
+      },
+      {
+        "rect": {
+          "x": 16,
+          "width": 361,
+          "y": 398.3333377838135,
+          "height": 55
+        },
+        "enabled": true,
+        "identifier": "About",
+        "index": 9,
+        "label": "About",
+        "hittable": true,
+        "depth": 5,
+        "parentIndex": 5,
+        "type": "Cell",
+        "ref": "e10",
+        "kind": "cell"
+      },
+      {
+        "rect": {
+          "x": 16,
+          "width": 361,
+          "y": 453.3333377838135,
+          "height": 55
+        },
+        "enabled": true,
+        "identifier": "SOFTWARE_UPDATE_LINK",
+        "index": 10,
+        "label": "Software Update",
+        "hittable": true,
+        "depth": 5,
+        "parentIndex": 5,
+        "type": "Cell",
+        "ref": "e11",
+        "kind": "cell"
+      },
+      {
+        "rect": {
+          "x": 16,
+          "width": 361,
+          "y": 508.3333377838135,
+          "height": 55
+        },
+        "enabled": true,
+        "identifier": "STORAGE_MGMT",
+        "index": 11,
+        "label": "iPhone Storage",
+        "hittable": true,
+        "depth": 5,
+        "parentIndex": 5,
+        "type": "Cell",
+        "ref": "e12",
+        "kind": "cell"
+      },
+      {
+        "rect": {
+          "height": 55,
+          "y": 598.3333377838135,
+          "width": 361,
+          "x": 16
+        },
+        "enabled": true,
+        "identifier": "COVERAGE",
+        "index": 12,
+        "label": "AppleCare & Warranty",
+        "hittable": true,
+        "depth": 5,
+        "parentIndex": 5,
+        "type": "Cell",
+        "ref": "e13",
+        "kind": "cell"
+      },
+      {
+        "index": 13,
+        "label": "AirDrop",
+        "enabled": true,
+        "type": "Cell",
+        "rect": {
+          "height": 55,
+          "y": 688.3333377838135,
+          "width": 361,
+          "x": 16
+        },
+        "identifier": "AIRDROP_LINK",
+        "hittable": true,
+        "depth": 5,
+        "parentIndex": 5,
+        "ref": "e14",
+        "kind": "cell"
+      },
+      {
+        "index": 14,
+        "label": "AirPlay & Continuity",
+        "enabled": true,
+        "type": "Cell",
+        "rect": {
+          "x": 16,
+          "y": 743.3333377838135,
+          "width": 361,
+          "height": 53.66666221618652
+        },
+        "identifier": "CONTINUITY_SPEC",
+        "hittable": true,
+        "depth": 5,
+        "parentIndex": 5,
+        "ref": "e15",
+        "kind": "cell"
+      }
+    ],
+    "truncated": false,
+    "appName": "com.apple.Preferences",
+    "appBundleId": "com.apple.Preferences",
+    "visibility": {
+      "partial": true,
+      "visibleNodeCount": 15,
+      "totalNodeCount": 15,
+      "reasons": [
+        "scroll-hidden-below"
+      ]
+    },
+    "keyboard": {
+      "kind": "absent"
+    },
+    "snapshotQuality": {
+      "state": "healthy",
+      "backend": "tree",
+      "timing": {
+        "acquisitionMs": 441.96200370788574,
+        "presentationMs": 0.5559921264648438
+      }
+    },
+    "snapshotDiagnostics": {
+      "stats": {
+        "count": 6,
+        "p50Ms": 4513,
+        "p95Ms": 6669,
+        "maxMs": 6669,
+        "slowThresholdMs": 1500,
+        "platform": "ios",
+        "backends": {
+          "xctest": 6
+        }
+      },
+      "warning": "Warning: ios snapshots are slow in this run: p95 6669ms over 5 captures. Possible causes: device load, app or dev server stuck, helper fallback, or stale daemon."
+    },
+    "refsGeneration": 758319
+  }
+}

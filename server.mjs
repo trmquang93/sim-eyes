@@ -22,6 +22,8 @@ import {
 import { needsShot, shortBatchReminder } from "./batch-plan.mjs";
 import { TAP_FALLBACK_STEPS, helpRequest, notRunText, pausedReminder, stepFailed, tapResult, tapWithFallback } from "./tap-recovery.mjs";
 import { staleSimEyesSessions } from "./stale-sessions.mjs";
+import { acquireDeviceLock, DeviceBusyError, deviceLockHeldBy, releaseDeviceLock } from "./device-lock.mjs";
+import { isAnyUdid, isRunnerRestartFailure, needsDownscale, pickDevice, pngSize } from "./device-target.mjs";
 import { BACK_GOAL, backTargets, dragEnds, gestureNode, gridPlan, pinchPlan, tapCount, tapGoalNames, tapTarget } from "./act-direct.mjs";
 import { controlsLine, coveredControlsLine, coveredScreenLine, screenLine } from "./screen-summary.mjs";
 import { screenCover } from "./cover-check.mjs";
@@ -52,7 +54,7 @@ import {
 } from "./pool.mjs";
 import { adCommandFromHost } from "./ad-command.mjs";
 import { retryDaemonStartup } from "./ad-daemon.mjs";
-import { preferDiffersFromBinding, preferHonored, SESSION_ID_RULE } from "./binding-prefer.mjs";
+import { preferDiffersFromBinding, preferHonored, SESSION_ID_RULE, targetDiffersFromBinding } from "./binding-prefer.mjs";
 import {
   SessionRegistry,
   formatSessionPrefix,
@@ -164,9 +166,9 @@ async function sweepStaleSessions() {
   }
 }
 
-async function acquireBinding({ preferUdid, preferDevice } = {}) {
+async function acquireBinding({ preferUdid, preferDevice, target } = {}) {
   if (ctx.binding) {
-    await renewLease(ctx.binding.leaseId).catch(() => {});
+    if (ctx.binding.leaseId) await renewLease(ctx.binding.leaseId).catch(() => {});
     return ctx.binding;
   }
   await sweepStaleSessions();
@@ -174,7 +176,9 @@ async function acquireBinding({ preferUdid, preferDevice } = {}) {
   const prefer = preferUdid || undefined;
   const preferName = preferDevice || undefined;
 
-  if (usePool()) {
+  if (target === "device") {
+    ctx.binding = await acquireDeviceBinding({ udid: prefer, name: preferName });
+  } else if (usePool()) {
     let udid = prefer;
     if (!udid && preferName) {
       udid = await resolveDeviceNameToUdid(preferName);
@@ -202,6 +206,32 @@ async function acquireBinding({ preferUdid, preferDevice } = {}) {
   }
   await mkdir(workDir(), { recursive: true });
   return ctx.binding;
+}
+
+/** UDIDs devicectl reports as connected; null when it cannot say (then agent-device's own list is used). */
+async function connectedDeviceIds() {
+  try {
+    const out = join(workDir(), "devicectl.json");
+    await mkdir(workDir(), { recursive: true });
+    await execCmd("xcrun", ["devicectl", "list", "devices", "--json-output", out], 60000);
+    const rows = JSON.parse(await readFile(out, "utf8")).result?.devices ?? [];
+    return new Set(
+      rows
+        .filter((d) => d.connectionProperties?.tunnelState === "connected" && d.hardwareProperties?.udid)
+        .map((d) => d.hardwareProperties.udid)
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** Bind a physical iPhone/iPad. sim-pool cannot lease hardware, so a lock file per UDID keeps two agents off one phone. */
+async function acquireDeviceBinding({ udid, name }) {
+  const rows = JSON.parse(await spawnAd(["devices", "--platform", "ios"], { json: true, timeoutMs: 30000 })).data?.devices ?? [];
+  const device = pickDevice(rows, { udid, name, connectedIds: await connectedDeviceIds() });
+  const session = `sim-eyes-${INSTANCE_ID}-${ctx.id}`;
+  const lockPath = await acquireDeviceLock({ udid: device.id, session });
+  return { kind: "device", leaseId: "", lockPath, udid: device.id, name: device.name, expiresAt: "", session };
 }
 
 /** sim-pool treats a preferred simulator as a hint and hands out any free one. A QA run on the wrong device is worse than none, so a miss is an error. */
@@ -253,7 +283,12 @@ async function pickAnyBootedDevice() {
 
 async function ensureBound() {
   if (!ctx.binding) await acquireBinding();
-  else if (ctx.binding.leaseId) {
+  else if (ctx.binding.lockPath) {
+    if (!(await deviceLockHeldBy(ctx.binding.lockPath, ctx.binding.session))) {
+      ctx.binding = null;
+      throw new Error("Device lock lost (another process removed it). Call acquire again or mark QA inconclusive.");
+    }
+  } else if (ctx.binding.leaseId) {
     try {
       await renewLease(ctx.binding.leaseId);
     } catch (err) {
@@ -287,16 +322,13 @@ async function releaseBinding({ closeSession = true } = {}) {
       ).catch(() => {});
     }
     if (current.leaseId) await releaseLease(current.leaseId);
+    if (current.lockPath) await releaseDeviceLock(current.lockPath, current.session);
   } finally {
     ctx.releasing = false;
   }
 }
 
-function isUdid(value) {
-  return /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/.test(
-    value
-  );
-}
+const isUdid = isAnyUdid;
 
 /** agent-device: `--udid` for UUIDs, `--device` for display names. */
 function deviceSelectArgs(udidOrName) {
@@ -311,17 +343,18 @@ const READ_ONLY_AD = new Set(["snapshot", "screenshot"]);
 async function runAd(args, opts) {
   const b = await ensureBound();
   if (!READ_ONLY_AD.has(args[0])) ctx.version += 1;
-  return spawnAd(
-    [
-      ...args,
-      "--session",
-      b.session,
-      "--platform",
-      "ios",
-      ...deviceSelectArgs(b.udid),
-    ],
-    opts
-  );
+  const argv = [...args, "--session", b.session, "--platform", "ios", ...deviceSelectArgs(b.udid)];
+  try {
+    return await spawnAd(argv, opts);
+  } catch (err) {
+    // On a phone agent-device can lose its runner connection after the runner already ran the command. A read is
+    // simply taken again; an action is not repeated (a second scroll would double it), so the screen-change check
+    // that follows every action decides whether it worked.
+    if (b.kind !== "device" || !isRunnerRestartFailure(err)) throw err;
+    if (READ_ONLY_AD.has(args[0])) return spawnAd(argv, opts);
+    await sleep(1500);
+    return "";
+  }
 }
 
 async function runAdJson(args, opts) {
@@ -338,7 +371,8 @@ async function ensureApp() {
   }
   // agent-device needs an app session before it can snapshot. Open the caller's app without
   // relaunching: a relaunch would kill an app they already started (e.g. from Xcode).
-  await runAd(["open", ctx.app], { timeoutMs: 180000 });
+  // The first command on a phone builds and signs the runner, which can take minutes.
+  await runAd(["open", ctx.app], { timeoutMs: ctx.binding?.kind === "device" ? 600000 : 180000 });
   ctx.appReady = true;
 }
 
@@ -398,9 +432,20 @@ async function currentShot(tag = "screen") {
   const dir = workDir();
   await mkdir(dir, { recursive: true });
   const path = join(dir, `${tag}-${Date.now()}.png`);
-  await runAd(["screenshot", path, "--pixel-density", "1"]);
+  // agent-device rejects --pixel-density on a device; its screenshots are Retina (3x), so shrink them to points.
+  if (ctx.binding?.kind === "device") await deviceShot(path);
+  else await runAd(["screenshot", path, "--pixel-density", "1"]);
   ctx.shot = { path, version: ctx.version };
   return ctx.shot;
+}
+
+async function deviceShot(path) {
+  await runAd(["screenshot", path]);
+  if (!ctx.screenSize) await takeSnapshot();
+  const png = pngSize(await readFile(path));
+  if (needsDownscale(png, ctx.screenSize)) {
+    await execCmd("sips", ["-z", String(ctx.screenSize.height), String(ctx.screenSize.width), path, "--out", path]);
+  }
 }
 
 async function readBase64(path) {
@@ -426,9 +471,15 @@ async function pressPoint(target) {
   const args = ["press", String(target.x), String(target.y)];
   // One device call sends both touches back to back (iOS needs the second within ~0.3 s); two steps are 1.5-4 s apart.
   if (target.double) args.push("--double-tap");
-  if (!ctx.quickTap) args.push("--settle", ...(backTargets([target]).length ? ["--settle-quiet", String(BACK_SETTLE_QUIET_MS)] : []));
+  const device = ctx.binding?.kind === "device";
+  // --settle needs the runner to snapshot, which a phone often cannot do right after a tap; wait a fixed time instead.
+  if (!ctx.quickTap && !device) args.push("--settle", ...(backTargets([target]).length ? ["--settle-quiet", String(BACK_SETTLE_QUIET_MS)] : []));
   await runAd(args);
+  if (device && !ctx.quickTap) await sleep(DEVICE_TAP_SETTLE_MS);
 }
+
+/** How long a tap on a phone waits for the screen to finish changing (no --settle there). */
+const DEVICE_TAP_SETTLE_MS = 1200;
 
 /** How long a quick tap that changed nothing waits before it is looked at once more (a transition that starts late). */
 const QUICK_RECHECK_MS = 500;
@@ -598,6 +649,11 @@ function execCmd(cmd, args, timeoutMs = 60000) {
 /** Reinstall the app from a copy of its own bundle, which empties its data container and preferences. */
 async function resetApp(bundleId) {
   await ensureBound();
+  if (ctx.binding?.kind === "device") {
+    throw new Error(
+      "open reset:true needs simctl and a simulator. On a real device uninstall and reinstall the app yourself, or use a goal step."
+    );
+  }
   const udid = ctx.binding?.udid;
   if (!/^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/.test(bundleId) || !isUdid(udid ?? "")) {
     throw new Error("open reset:true needs the app's bundle id (for example com.example.app) and a leased simulator.");
@@ -879,7 +935,7 @@ async function tapStep(args) {
   return tapWithFallback(args, {
     direct: tapExact,
     goal: (goal) => actOn(goal, { max_steps: TAP_FALLBACK_STEPS }),
-    fatal: (err) => err instanceof PoolBusyError || err?.code === "SIM_POOL_BUSY",
+    fatal: (err) => err instanceof PoolBusyError || err instanceof DeviceBusyError || err?.code === "SIM_POOL_BUSY",
   });
 }
 
@@ -999,8 +1055,10 @@ function statusText() {
     lines.push(
       `bound: yes`,
       `agent_device_session: ${ctx.binding.session}`,
+      `kind: ${ctx.binding.kind ?? "simulator"}`,
       `udid: ${ctx.binding.udid}`,
       `name: ${ctx.binding.name}`,
+      ...(ctx.binding.lockPath ? [`lock: ${ctx.binding.lockPath}`] : []),
       `lease: ${ctx.binding.leaseId || "(none)"}`,
       `expires: ${ctx.binding.expiresAt || "(n/a)"}`
     );
@@ -1100,14 +1158,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: "acquire",
-      description: `Lease one simulator for this session_id via sim-pool (no UDID in mcp.json). ${SESSION_ID_RULE} app is required (name or bundle id): the session attaches to that app without relaunching it. Optional prefer_udid / prefer_device on the tool args only: if sim-pool cannot grant that simulator the call fails and says why, it never hands you a different one silently. rebind:true switches simulators for this session_id.`,
+      description: `Lease one simulator for this session_id via sim-pool (no UDID in mcp.json), or with target:\"device\" bind a connected physical iPhone/iPad (lock file per UDID; open reset:true is not available there; signing needs AGENT_DEVICE_IOS_TEAM_ID and AGENT_DEVICE_IOS_BUNDLE_ID in the MCP env). ${SESSION_ID_RULE} app is required (name or bundle id): the session attaches to that app without relaunching it. Optional prefer_udid / prefer_device on the tool args only: if sim-pool cannot grant that simulator the call fails and says why, it never hands you a different one silently. rebind:true switches simulators for this session_id.`,
       inputSchema: {
         type: "object",
         properties: {
           ...SESSION_ID_PROPERTY,
+          target: {
+            type: "string",
+            enum: ["simulator", "device"],
+            description:
+              "simulator (default): lease a simulator via sim-pool. device: drive a connected physical iPhone/iPad (trusted, unlocked, Developer Mode on; guarded by a lock file, DEVICE_BUSY when another session holds it). Never chosen by default.",
+          },
           prefer_udid: {
             type: "string",
-            description: "Whitelisted simulator UDID. The call fails if it is leased to another owner or not whitelisted. Omit it to take any free device.",
+            description: "Whitelisted simulator UDID (or the phone's UDID with target:device). The call fails if it is leased to another owner or not whitelisted. Omit it to take any free device.",
           },
           prefer_device: {
             type: "string",
@@ -1316,9 +1380,12 @@ async function handleMcpTool(name, rawArgs) {
 
     return prefixSession(result, sessionId, created);
   } catch (err) {
+    const deviceBusy = err instanceof DeviceBusyError;
     const busy =
-      err instanceof PoolBusyError || err?.code === "SIM_POOL_BUSY";
-    const text = busy
+      deviceBusy || err instanceof PoolBusyError || err?.code === "SIM_POOL_BUSY";
+    const text = deviceBusy
+      ? `DEVICE_BUSY: ${err.message}`
+      : busy
       ? `SIM_POOL_BUSY: ${err.message}\nReport QA inconclusive — do not steal another agent's simulator.`
       : `Error: ${err.message}`;
     return prefixSession(
@@ -1360,10 +1427,11 @@ async function handleToolCore(name, args) {
     const prefer = {
       preferUdid: args?.prefer_udid,
       preferDevice: args?.prefer_device,
+      target: args?.target === "device" ? "device" : "simulator",
     };
     const rebind = args?.rebind === true;
     if (ctx.binding) {
-      if (preferDiffersFromBinding(ctx.binding, prefer) && !rebind) {
+      if ((preferDiffersFromBinding(ctx.binding, prefer) || targetDiffersFromBinding(ctx.binding, prefer.target)) && !rebind) {
         return {
           content: [
             {
@@ -1386,7 +1454,7 @@ async function handleToolCore(name, args) {
       if (rebind) {
         await releaseBinding();
       } else {
-        await renewLease(ctx.binding.leaseId).catch(() => {});
+        if (ctx.binding.leaseId) await renewLease(ctx.binding.leaseId).catch(() => {});
         return toolResult(
           `Already bound.\n${statusText()}\n\nReuse this session_id until release (or rebind:true to switch simulators).`
         );
@@ -1395,7 +1463,7 @@ async function handleToolCore(name, args) {
     await acquireBinding(prefer);
     const asked = prefer.preferUdid || prefer.preferDevice;
     return toolResult(
-      `Acquired simulator for this session_id.${asked ? `\npreference: honored (${asked})` : ""}\n${statusText()}\n\nOther session_ids get other free devices from sim-pool (or SIM_POOL_BUSY).`
+      `Acquired ${prefer.target} for this session_id.${asked ? `\npreference: honored (${asked})` : ""}\n${statusText()}\n\n${prefer.target === "device" ? "A device is held by a lock file: other session_ids get DEVICE_BUSY for it. Release when QA ends." : "Other session_ids get other free devices from sim-pool (or SIM_POOL_BUSY)."}`
     );
   }
 
@@ -1462,6 +1530,11 @@ async function runStep(tool, args, flags) {
   }
 
   if (tool === "record") {
+    if (ctx.binding?.kind === "device") {
+      throw new Error(
+        "record is not supported on a real device: agent-device's runner restarts during a recording on hardware and the clip is lost. Use save: screenshots on the steps instead."
+      );
+    }
     if (args.action === "start") {
       const dir = workDir();
       await mkdir(dir, { recursive: true });
@@ -1495,7 +1568,7 @@ async function runStep(tool, args, flags) {
 
 /** A step that threw: the batch ends there with whatever the screen shows, so the agent can see why. */
 async function failedStep(err) {
-  if (err instanceof PoolBusyError || err?.code === "SIM_POOL_BUSY") throw err;
+  if (err instanceof PoolBusyError || err instanceof DeviceBusyError || err?.code === "SIM_POOL_BUSY") throw err;
   try {
     const screen = await reportScreen({ summary: `failed: ${err.message}`, failed: true }, {}, { wantShot: true, last: true, image: true });
     return screen;

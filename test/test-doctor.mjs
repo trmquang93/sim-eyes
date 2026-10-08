@@ -51,7 +51,7 @@ const status = (results, id) => results.find((r) => r.id === id);
   const { deps } = mac();
   const results = await runDoctor(deps);
   assert.deepEqual(results.map((r) => [r.id, r.status]), [
-    ["macos", "pass"], ["node", "pass"], ["xcode-clt", "pass"], ["simulator", "pass"], ["python3", "pass"],
+    ["macos", "pass"], ["node", "pass"], ["xcode-clt", "pass"], ["simulator", "pass"], ["real-device", "warn"], ["python3", "pass"],
     ["sim-pool", "pass"], ["agent-device", "pass"], ["ocr", "pass"], ["ffmpeg", "pass"], ["typesafe", "pass"],
   ]);
   assert.equal(doctorExitCode(results), 0);
@@ -126,6 +126,26 @@ assert.equal(status(await runDoctor(mac({ answers: { "node /ad/agent-device.mjs 
   const text = formatDoctor(await runDoctor(mac({ deps: { platform: "linux" } }).deps));
   assert.match(text, /FAIL +macos/);
   assert.match(text, /fix:/, "a failing line says how to fix it");
+}
+
+// A simulator-only Mac is the normal install: no phone must not fail the run, or doctor would reject everyone without hardware.
+{
+  const { deps } = mac();
+  const none = await runDoctor(deps);
+  assert.equal(status(none, "real-device").status, "warn", "no connected phone is a warning, not a failure");
+  assert.equal(doctorExitCode(none), 0);
+
+  const phone = "iPhone  00008120-001429D11A42201E (UDID)  connected  iPhone 15  physical \n";
+  const unsigned = mac({ answers: { "xcrun devicectl list devices": { code: 0, stdout: phone, stderr: "" } } });
+  assert.match(status(await runDoctor(unsigned.deps), "real-device").fix, /AGENT_DEVICE_IOS_TEAM_ID/, "a phone without signing env says what to set");
+
+  const signed = mac({
+    answers: { "xcrun devicectl list devices": { code: 0, stdout: phone + "sim  X (UDID)  connected  iPhone 17  simulated\n", stderr: "" } },
+    deps: { env: { AGENT_DEVICE_IOS_TEAM_ID: "T", AGENT_DEVICE_IOS_BUNDLE_ID: "b" } },
+  });
+  const ready = status(await runDoctor(signed.deps), "real-device");
+  assert.equal(ready.status, "pass");
+  assert.match(ready.detail, /^1 connected/, "simulators listed by devicectl are not phones");
 }
 
 console.log("test-doctor: ok");

@@ -1,6 +1,6 @@
 # Real iPhone/iPad support - Implementation Plan
 
-Status: PLANNED (2026-10-09). Nothing implemented. Phase 0 (spike) comes first and may change Phases 1-3.
+Status: IMPLEMENTED on `feat/real-device` (2026-10-09), S0-S7 and S10 verified live; S8 N/A, S9 inconclusive (no TYPESAFE_API_KEY), S11 pending. See Progress log.
 
 > **HANDOFF NOTICE - read this before starting work.**
 >
@@ -35,15 +35,15 @@ Status: PLANNED (2026-10-09). Nothing implemented. Phase 0 (spike) comes first a
 
 Evidence dir: `.local/qa-evidence/real-device/` (create it; keep out of git unless the repo already tracks `.local`).
 
-- [ ] **S0** agent-device can open Settings on the iPhone, snapshot, and tap "General" with the runner signed. Evidence: `spike/` command transcript + `spike/snapshot-settings.json` + `spike/settings.png` + the "Spike results" section filled in.
-- [ ] **S1** `acquire {target:"device"}` binds the iPhone (UDID `00008120-001429D11A42201E`), reports `kind: device`, no sim-pool lease, and writes a lock file. Evidence: `s1-acquire.txt` (tool output) + `ls` of the lock dir.
-- [ ] **S2** `batch` `open` Settings, `tap` "General", `tap` "About" reports the screen title "About" in text and returns a screenshot of it. Evidence: `s2-about.png` + `s2-batch.txt`.
-- [ ] **S3** `tap_at` with a point read off the device screenshot lands on the intended row (proves point/pixel scale). Evidence: `s3-before.png`, `s3-after.png`, `s3-batch.txt`; spike's measured scale recorded.
-- [ ] **S4** A second `session_id` acquiring the same phone gets `DEVICE_BUSY` and does not touch the first session. Evidence: `s4-busy.txt`.
-- [ ] **S5** `release` removes the lock file and closes the agent-device session; a third acquire succeeds. Evidence: `s5-release.txt` + `ls` showing empty lock dir.
-- [ ] **S6** A lock left by a dead pid is reclaimed. Evidence: unit test `test-device-lock.mjs` "reclaims a lock whose pid is dead" + live note in `s6-stale-lock.txt`.
-- [ ] **S7** `open reset:true` on the phone fails with the documented message and changes nothing. Evidence: `s7-reset.txt`.
-- [ ] **S8** `record start`/`stop` on the phone returns a contact sheet. Evidence: `s8-sheet.png` + `s8-clip.mp4` path. (Mark N/A with reason if agent-device refuses; do not claim.)
+- [x] **S0** agent-device can open Settings on the iPhone, snapshot, and tap "General" with the runner signed. Evidence: `spike/` command transcript + `spike/snapshot-settings.json` + `spike/settings.png` + the "Spike results" section filled in.
+- [x] **S1** `acquire {target:"device"}` binds the iPhone (UDID `00008120-001429D11A42201E`), reports `kind: device`, no sim-pool lease, and writes a lock file. Evidence: `s1-acquire.txt` (tool output) + `ls` of the lock dir.
+- [x] **S2** `batch` `open` Settings, `tap` "General", `tap` "About" reports the screen title "About" in text and returns a screenshot of it. Evidence: `s2-about.png` + `s2-batch.txt`.
+- [x] **S3** `tap_at` with a point read off the device screenshot lands on the intended row (proves point/pixel scale). Evidence: `s3-before.png`, `s3-after.png`, `s3-batch.txt`; spike's measured scale recorded.
+- [x] **S4** A second `session_id` acquiring the same phone gets `DEVICE_BUSY` and does not touch the first session. Evidence: `s4-busy.txt`.
+- [x] **S5** `release` removes the lock file and closes the agent-device session; a third acquire succeeds. Evidence: `s5-release.txt` + `ls` showing empty lock dir.
+- [x] **S6** A lock left by a dead pid is reclaimed. Evidence: unit test `test-device-lock.mjs` "reclaims a lock whose pid is dead" + live note in `s6-stale-lock.txt`.
+- [x] **S7** `open reset:true` on the phone fails with the documented message and changes nothing. Evidence: `s7-reset.txt`.
+- [ ] **S8 (N/A: record refused on device)** `record start`/`stop` on the phone returns a contact sheet. Evidence: `s8-sheet.png` + `s8-clip.mp4` path. (Mark N/A with reason if agent-device refuses; do not claim.)
 - [ ] **S9** `goal` ("open the About page") completes on the phone (needs `TYPESAFE_API_KEY`). Evidence: `s9-goal.txt`. If no key, **inconclusive**, not pass.
 - [ ] **S10** Simulator path unchanged: `npm test` green, and `node test/test-recovery-live.mjs` passes on a free simulator (or reported inconclusive if the pool is busy). Evidence: `s10-npm-test.txt`, `s10-recovery-live.txt`.
 - [ ] **S11** A fresh Claude Code session loads the changed `acquire` tool and drives S1-S5 through the real MCP. Evidence: that session's PASS/FAIL/INCONCLUSIVE report in the scratchpad, copied to `s11-fresh-session.md`.
@@ -270,9 +270,25 @@ Same steps as Phase 4, run by the implementer, not handed to the owner.
 
 - 2026-10-09: Plan written after code reading and owner interview. No code changed. Next: Phase 0 spike.
 
+- 2026-10-09: Committed unrelated work to main (85a... pushed), branch `feat/real-device`. Phase 0 done: see Spike results. Phase 2 screenshot normalization is now required. Next: Phase 1.
+
+- 2026-10-09 (implementation): Phases 1-3 done. New `device-lock.mjs`, `device-target.mjs`, tests, `test/test-device-live.mjs`; `server.mjs` (acquire `target`, device binding, lock, reset refusal, record refusal, 3x screenshot shrink via sips, 600 s first open, `--settle` skipped + 1.2 s wait on taps, runner-restart handling in `runAd`: reads retried, actions never repeated), `binding-prefer.mjs`, `doctor.mjs` (real-device warn check), README "Real device". Divergences from the plan: (1) record is refused on hardware instead of attempted (runner restart kills the clip); (2) `pickDevice` narrows by `devicectl` connected set because agent-device lists an offline iPad as booted; the iPad later came online, so the phone needs `prefer_udid` when both are connected; (3) screenshot normalization is unconditional on devices. Evidence: `.local/qa-evidence/real-device/` (S1-S7 from `test/test-device-live.mjs`; S10 `s10-npm-test.txt` and `s10-recovery-live.txt`). S9 inconclusive: no `TYPESAFE_API_KEY` in this shell. Gotcha: a `record start` on a device leaked an agent-device claim in `~/.agent-device/device-claims/` that blocked the phone (DEVICE_IN_USE) after the owner died; removed by hand. Next: S11 fresh-session check.
+
 ## Spike results
 
-_(fill in during Phase 0: team used, PNG size vs points, `--pixel-density` effect, `devices --json` row shape for the phone, runner build time, failure reasons, out-of-process UI probe, record result)_
+**Phase 0 results (2026-10-09, agent-device 0.21.19, iPhone 15 iOS 26.6.2)**
+
+- **Signing:** `AGENT_DEVICE_IOS_TEAM_ID=WVYA86B7LC` (team of most local projects) with `AGENT_DEVICE_IOS_BUNDLE_ID=com.quang.agentdevice.runner` builds and runs the runner. Without them the build uses the upstream team and fails with `signing_provisioning_profile_missing`. First runner build was quick (under a minute).
+- **Daemon env:** a shared agent-device daemon keeps the env of whoever started it, so signing vars set on a later call are ignored (first attempt failed this way). `AGENT_DEVICE_STATE_DIR=<dir>` gives a private daemon. sim-eyes must pass the signing vars to every agent-device call and document that the MCP's `env` must carry them; if the shared daemon was started without them, device commands fail.
+- **`devices --json` row:** `{platform:"ios", appleOs:"ios"|"ipados", id:"00008120-001429D11A42201E", name:"Quang’s iPhone", kind:"device", target:"mobile", booted:true}`. The offline iPad is also listed with `booted:true`, so `booted` does not mean connected: the target picker cannot rely on it and must not offer the iPad silently.
+- **`--udid` works** for the physical UDID. Name has a curly apostrophe.
+- **Screenshot scale:** `--pixel-density` is **rejected on a device** (`UNSUPPORTED_OPERATION`), so `currentShot` must omit it. The native PNG is 1179x2556 against a 393x852 point screen: exactly **3x**. Normalization to points is required (Phase 2 is not conditional).
+- **Taps:** `tap @e13` landed at point (197,535) and opened General. `tap 'General'` is rejected (needs `text=General`); `tap text=...` failed silently in one run while the row was off screen.
+- **Flaky first snapshot:** the first `snapshot` after a screen-changing action (scroll, tap) fails once with "runner was already restarted ... snapshot still failed"; an immediate second snapshot succeeds (~7 s). sim-eyes needs one retry of snapshot on a device.
+- **Record:** `record start` works; `record stop` then failed ("Runner did not accept connection"), leaving the runner unstable until `close`. S8 not proven; treat record on a device as unsupported until a live retry succeeds.
+- **System UI probe:** not done.
+- Evidence: `.local/qa-evidence/real-device/spike/`. Fixture: `fixtures/trees/device-settings-general.json`.
+
 
 ## Summary
 

@@ -56,6 +56,17 @@ export async function runDoctor({ platform, nodeVersion, env, exec, pool, poolCo
       : fail("simulator", "no iPhone simulator available", "In Xcode, open Window > Devices and Simulators and add an iPhone simulator.")
   );
 
+  // Optional: only `acquire target:"device"` needs a phone, so none connected is a note, never a failure.
+  const devices = await exec("xcrun", ["devicectl", "list", "devices"]);
+  const phones = devices.code === 0 ? devices.stdout.split("\n").filter((l) => /\bconnected\b/.test(l) && /\bphysical\b/.test(l)).length : 0;
+  results.push(
+    phones === 0
+      ? warn("real-device", "no connected iPhone/iPad (only needed for acquire target:\"device\")", "Connect it by cable, unlock it, tap Trust, turn on Developer Mode.")
+      : env.AGENT_DEVICE_IOS_TEAM_ID && env.AGENT_DEVICE_IOS_BUNDLE_ID
+      ? ok("real-device", `${phones} connected; runner signing env set`)
+      : warn("real-device", `${phones} connected, but the runner signing env is not set`, "Set AGENT_DEVICE_IOS_TEAM_ID and AGENT_DEVICE_IOS_BUNDLE_ID in the MCP server's env (README: Real device).")
+  );
+
   if (!cltOk) {
     results.push(fail("python3", "not checked: needs the Xcode command line tools first", "Install the command line tools (see xcode-clt)."));
   } else {

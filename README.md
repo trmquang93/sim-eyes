@@ -144,6 +144,17 @@ A view in another process (the Photos picker, a permission sheet) draws over the
 
 Leases renew on every tool call; TTL + dead MCP pid recover orphans via sim-pool GC.
 
+## Real device (iPhone / iPad)
+
+`acquire` with `target:"device"` drives a connected phone instead of a simulator. A phone is never the default, and there is no sim-pool lease for hardware: a lock file per UDID in `~/.local/sim-eyes/device-locks/` keeps two agents off one phone (a second `acquire` gets `DEVICE_BUSY`; a lock left by a dead process is reclaimed).
+
+Setup, once:
+- Connect the phone by cable, unlock it, tap Trust, turn on Developer Mode (Settings > Privacy & Security). `sim-eyes doctor` shows whether it is seen.
+- agent-device builds and signs a helper app (`AgentDeviceRunner`) on the phone. Put your Apple team and a unique bundle id in the MCP server's `env`: `AGENT_DEVICE_IOS_TEAM_ID` and `AGENT_DEVICE_IOS_BUNDLE_ID` (for example `com.yourname.agentdevice.runner`). The first command takes a while (the build); `open` allows 10 minutes. agent-device's daemon keeps the env of whoever started it, so if it was started without these, run `agent-device daemon stop` once, or set `AGENT_DEVICE_STATE_DIR` for a separate daemon.
+- With several devices connected pass `prefer_udid` (or `prefer_device`); sim-eyes never guesses between phones.
+
+Limits: `record` is refused on a phone (agent-device loses the recording when its runner restarts; use `save:` screenshots); `open reset:true` is refused (no simctl on hardware); Studio stays simulator-only; screenshots are shrunk to points like on a simulator; a tap waits a fixed 1.2 s because `--settle` is unreliable on a phone; Photos pickers and permission sheets outside the app's tree are unproven on hardware. The agent drives your real phone and its real data: use a test device.
+
 ## Studio (plain-text tests for testers)
 
 **Testers: use the Mac app.** Download it from the hub's home page (`https://sim-eyes.unitvn.com`, no token needed). It holds its own Node, agent-device, sim-pool and Studio (about 50 MB). A tester needs only a Mac with Xcode installed and opened once, and an **invite token** from the person who runs the hub:
