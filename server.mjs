@@ -1530,11 +1530,6 @@ async function runStep(tool, args, flags) {
   }
 
   if (tool === "record") {
-    if (ctx.binding?.kind === "device") {
-      throw new Error(
-        "record is not supported on a real device: agent-device's runner restarts during a recording on hardware and the clip is lost. Use save: screenshots on the steps instead."
-      );
-    }
     if (args.action === "start") {
       const dir = workDir();
       await mkdir(dir, { recursive: true });

@@ -1,6 +1,6 @@
 # Real iPhone/iPad support - Implementation Plan
 
-Status: DONE on `feat/real-device` (2026-10-09): S0-S7, S9-S11 verified live; S8 N/A (record refused on a device). See Progress log.
+Status: DONE on `feat/real-device` (2026-10-09): S0-S7, S9-S11 verified live; S8 verified (record works on a device, see Progress log 2026-10-09 record spike). See Progress log.
 
 > **HANDOFF NOTICE - read this before starting work.**
 >
@@ -43,7 +43,7 @@ Evidence dir: `.local/qa-evidence/real-device/` (create it; keep out of git unle
 - [x] **S5** `release` removes the lock file and closes the agent-device session; a third acquire succeeds. Evidence: `s5-release.txt` + `ls` showing empty lock dir.
 - [x] **S6** A lock left by a dead pid is reclaimed. Evidence: unit test `test-device-lock.mjs` "reclaims a lock whose pid is dead" + live note in `s6-stale-lock.txt`.
 - [x] **S7** `open reset:true` on the phone fails with the documented message and changes nothing. Evidence: `s7-reset.txt`.
-- [ ] **S8 (N/A: record refused on device)** `record start`/`stop` on the phone returns a contact sheet. Evidence: `s8-sheet.png` + `s8-clip.mp4` path. (Mark N/A with reason if agent-device refuses; do not claim.)
+- [x] **S8 (verified 2026-10-09: record works on device)** `record start`/`stop` on the phone returns a contact sheet. Evidence: `s8-sheet.png` + `s8-clip.mp4` path. (Mark N/A with reason if agent-device refuses; do not claim.)
 - [x] **S9** `goal` ("open the About page") completes on the phone (needs `TYPESAFE_API_KEY`). Evidence: `s9-goal.txt`. If no key, **inconclusive**, not pass.
 - [ ] **S10** Simulator path unchanged: `npm test` green, and `node test/test-recovery-live.mjs` passes on a free simulator (or reported inconclusive if the pool is busy). Evidence: `s10-npm-test.txt`, `s10-recovery-live.txt`.
 - [x] **S11** A fresh Claude Code session loads the changed `acquire` tool and drives S1-S5 through the real MCP. Evidence: that session's PASS/FAIL/INCONCLUSIVE report in the scratchpad, copied to `s11-fresh-session.md`.
@@ -296,3 +296,5 @@ Same steps as Phase 4, run by the implementer, not handed to the owner.
 
 - New files: 6 (`device-lock.mjs`, `device-target.mjs`, `test/test-device-lock.mjs`, `test/test-device-target.mjs`, `test/test-device-live.mjs`, `fixtures/trees/device-settings-general.json`) plus the evidence folder.
 - Modified files: 9 (`server.mjs`, `binding-prefer.mjs`, `doctor.mjs`, `package.json`, `test/test-tools.mjs`, `test/test-binding-prefer.mjs`, `test/test-doctor.mjs`, `README.md`, local `CLAUDE.md`).
+
+- 2026-10-09 (record spike): the earlier record failure did not reproduce. agent-device `record start/stop` (with and without `--scope device`, cold runner, across taps/swipes/back/screenshot) gave playable h264 clips (`record-spike/`). The runner writes the mp4 in its own app data container and agent-device copies it out with devicectl on stop; no Photo Library import exists from the host. Removed the device refusal in `server.mjs`; `test/test-device-live.mjs` S8 now records, swipes, stops, and checks the clip has frames. Evidence: `s8-record.txt`, `s8-clip.mp4`. Restart Claude Code to load the change.

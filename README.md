@@ -153,7 +153,7 @@ Setup, once:
 - agent-device builds and signs a helper app (`AgentDeviceRunner`) on the phone. Put your Apple team and a unique bundle id in the MCP server's `env`: `AGENT_DEVICE_IOS_TEAM_ID` and `AGENT_DEVICE_IOS_BUNDLE_ID` (for example `com.yourname.agentdevice.runner`). The first command takes a while (the build); `open` allows 10 minutes. agent-device's daemon keeps the env of whoever started it, so if it was started without these, run `agent-device daemon stop` once, or set `AGENT_DEVICE_STATE_DIR` for a separate daemon.
 - With several devices connected pass `prefer_udid` (or `prefer_device`); sim-eyes never guesses between phones.
 
-Limits: `record` is refused on a phone (agent-device loses the recording when its runner restarts; use `save:` screenshots); `open reset:true` is refused (no simctl on hardware); Studio stays simulator-only; screenshots are shrunk to points like on a simulator; a tap waits a fixed 1.2 s because `--settle` is unreliable on a phone; Photos pickers and permission sheets outside the app's tree are unproven on hardware. The agent drives your real phone and its real data: use a test device.
+Limits: `record` works on a phone (the clip is written inside agent-device's runner app and copied out on stop; verified with taps, swipes and back), `open reset:true` is refused (no simctl on hardware); Studio stays simulator-only; screenshots are shrunk to points like on a simulator; a tap waits a fixed 1.2 s because `--settle` is unreliable on a phone; Photos pickers and permission sheets outside the app's tree are unproven on hardware. The agent drives your real phone and its real data: use a test device.
 
 ## Studio (plain-text tests for testers)
 

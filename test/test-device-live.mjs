@@ -2,10 +2,10 @@
 // Manual: needs the iPhone attached, unlocked, trusted, Developer Mode on, and signing env:
 //   AGENT_DEVICE_IOS_TEAM_ID=<team> AGENT_DEVICE_IOS_BUNDLE_ID=<id> node test/test-device-live.mjs
 // Drives server.mjs over MCP: acquire target:"device", Settings > General > About, tap_at, a second
-// session getting DEVICE_BUSY, reset refusal, release. Evidence goes to .local/qa-evidence/real-device/.
+// session getting DEVICE_BUSY, reset refusal, record, release. Evidence goes to .local/qa-evidence/real-device/.
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -70,10 +70,15 @@ try {
   save("s7-reset.txt", text(reset));
   assert.match(text(reset), /reset:true needs simctl and a simulator/);
 
-  // S8: record is refused up front on hardware (the runner restart loses the clip).
-  const rec = await call("batch", { session_id: sessionId, app, image: false, actions: [{ tool: "record", action: "start" }] });
-  save("s8-record.txt", text(rec));
-  assert.match(text(rec), /record is not supported on a real device/);
+  // S8: record on hardware: start, swipe, stop returns a contact sheet and a playable clip.
+  const recStart = await call("batch", { session_id: sessionId, app, image: false, actions: [{ tool: "record", action: "start" }, { tool: "swipe", from: { x: 197, y: 600 }, to: { x: 197, y: 350 } }, { tool: "wait", seconds: 1 }] });
+  const recStop = await call("batch", { session_id: sessionId, app, image: false, actions: [{ tool: "record", action: "stop" }] });
+  save("s8-record.txt", `${text(recStart)}\n\n${text(recStop)}`);
+  assert.ok(!recStart.isError && !recStop.isError, "record start and stop succeed");
+  const clip = text(recStop).match(/Video: (\S+\.mp4)/)?.[1];
+  assert.ok(clip && existsSync(clip), "stop reports an existing clip");
+  assert.ok(Number(execFileSync("ffprobe", ["-v", "error", "-show_entries", "stream=nb_frames", "-of", "default=nw=1:nk=1", clip]).toString().trim()) > 0, "clip has frames");
+  if (clip) copyFileSync(clip, join(evidence, "s8-clip.mp4"));
 
   // S2: Settings > General > About
   // Settings keeps its scroll position between runs: go to the top, then down one page only if General is not visible.
