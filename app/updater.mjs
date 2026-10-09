@@ -149,8 +149,15 @@ const hasStudio = (path) => stat(join(path, "studio", "studio.mjs")).then((s) =>
 async function linkNodeModules(path, target) {
   const link = join(path, "node_modules");
   if ((await lstat(link).catch(() => null)) && (await readlink(link).catch(() => null)) === target) return;
-  await rm(link, { recursive: true, force: true });
-  await symlink(target, link);
+  // Studio and MCP processes all call this at start: a temp link renamed over the old one is never missing or half-made.
+  const existing = await lstat(link).catch(() => null);
+  if (existing && !existing.isSymbolicLink()) await rm(link, { recursive: true, force: true });
+  const temp = `${link}.${process.pid}.${Math.random().toString(36).slice(2)}`;
+  await symlink(target, temp);
+  await rename(temp, link).catch(async (err) => {
+    await rm(temp, { force: true });
+    throw err;
+  });
 }
 
 /** The code folder to run: the newest installed version that is not marked bad, or the one built into the app. */

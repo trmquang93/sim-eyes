@@ -76,6 +76,20 @@ try {
     assert.equal((await check(dir, hub)).status, "up-to-date", "the same version is not installed twice");
   }
 
+  // Studio and every MCP process call `choose` at start, so many at once must all succeed (a failed one would fall back to old code).
+  {
+    const dir = await newDir();
+    await check(dir, await published("1.5.0"));
+    const nodeModules = join(root, "app-node_modules-race");
+    await mkdir(nodeModules, { recursive: true });
+    for (let round = 0; round < 20; round += 1) {
+      await rm(join(dir, "bundles", "1.5.0", "node_modules"), { force: true });
+      const results = await Promise.all(Array.from({ length: 12 }, () => chooseBundle({ dir, builtin, nodeModules })));
+      assert.ok(results.every((r) => r.version === "1.5.0"), "every concurrent choose returns the staged bundle");
+      assert.equal(await readlink(join(dir, "bundles", "1.5.0", "node_modules")), nodeModules);
+    }
+  }
+
   // The signature must be the release key's, and must cover every field that decides what runs.
   {
     const dir = await newDir();
