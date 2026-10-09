@@ -1,0 +1,66 @@
+# Distinctive text from our source. A protected build must contain none of it (scripts/protect.mjs fails closed),
+# and the plain source must contain nearly all of it (test-release-bundle), so a zero means something.
+# Comment phrases never reach a protected file; local names are renamed; strings are encoded. Keep exported names out: they stay.
+sim-eyes MCP — one Cursor agent ↔ one leased s
+Active client session for the current MCP tool
+Resolve npx's agent-device binary once: going 
+Below this, the chosen next action is not trus
+After a tap that changed nothing (a disabled r
+A tap on a row read from the screenshot needs 
+goal steps a failed tap may spend: enough to s
+A step that did not do its job: the batch stop
+The goal a failed tap falls back to. It reads 
+The suggested verdict for a checkpoint. A chec
+turns that into pass / fail / unsure. Nothing 
+and anything unclear (no judge, an error, no s
+The fixed phrases a tester can write, in Engli
+every other line goes to map-line.mjs. Quotes 
+apostrophe inside a label is not a quote). Vie
+has its own result and screenshot. The first s
+always released. Studio itself installs the se
+The daemon forgot the session (it restarted un
+Text above this row (points) is the status bar
+Fewer labelled controls than this say too litt
+The tree is hidden when at most this share of 
+The Back controls on screen: the nav bar's Bac
+The text fields whose placeholder or current v
+Every visible text with this exact label, as p
+Runs many tests one after another: the tests t
+own lease, build, fixtures and start), so one 
+The tests a selector names, in case-ID order (
+sim-eyes hub: the small server a tester's Mac 
+invite token: hands out the latest signed Stud
+VPS). Two things need no token: /healthz, and 
+The app's updater. It lives in the app, not in
+for the latest signed Studio bundle, checks ev
+CLI (the launcher reads one JSON line from std
+When the list is cut, the last labels still sh
+Long enough to read a dialog's message, short 
+One line on what the screen is: title, pager p
+agent-device talks to one local daemon that it
+clients that all find no daemon and all try to
+It also clears one state no client can: a daem
+The project folder: plain JSON files under a r
+A folder and file name made from what the test
+Slugs are the only thing a URL may carry into 
+Below this, Vision's reading is too doubtful t
+OCR text this close (points) to an accessibili
+Stacked OCR lines are one block when left edge
+It changes nothing, and it never runs python3 
+checks look at, passed in so each branch can b
+the vendored copy because both keep lease stat
+runs through python3: npm does not keep the ex
+Make sure the pool has a whitelist: the first 
+agent-device's client starts its daemon when i
+is raised before the command is sent, so the c
+Puts a test's preconditions into the leased si
+unchanged. A named set is defined once per pro
+Paths stay inside the project's fixtures folde
+The app under test: a simulator build the test
+Everything that touches the Mac goes through a
+production, no shell), so a path with spaces o
+Missing, unknown or revoked invite token
+The update manifest has a bad version
+That simulator is not on the pool whitelist
+A tap without a label is a mistake in the batch
+no control has an accessibility label

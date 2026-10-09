@@ -41,7 +41,7 @@ chmod +x "$RES/sim-pool"
 
 # 3. Studio + MCP server code (no tests, evals or fixtures), then production dependencies and agent-device.
 cd "$REPO"
-for f in *.mjs ocr.swift package.json; do
+for f in *.mjs package.json; do
   case "$f" in test-*|eval-*) continue ;; esac
   cp "$f" "$RES/sim-eyes/$f"
 done
@@ -50,14 +50,16 @@ for f in studio/*.mjs; do
   case "$f" in studio/test-*|studio/eval-*) continue ;; esac
   cp "$f" "$RES/sim-eyes/$f"
 done
-cp studio/pdf-facts.swift "$RES/sim-eyes/studio/pdf-facts.swift"
 cp -R studio/public "$RES/sim-eyes/studio/public"
+# Nothing in the app may show our source: minify + obfuscate every shipped file in place (before npm install, so node_modules is not there).
+node scripts/protect.mjs --src "$RES/sim-eyes" --out "$RES/sim-eyes" --version "$VERSION"
 ( cd "$RES/sim-eyes" && PATH="$(dirname "$RES/node"):$PATH" npm install --omit=dev --no-audit --no-fund --silent && npm install --no-save --omit=dev --no-audit --no-fund --silent "agent-device@$AGENT_DEVICE_VERSION" )
 
 # 3b. What the updater needs, next to the code and outside any bundle: the updater itself, the public key it checks signatures with,
 # and app.json (hub address, this app's version, and the hash of the dependencies a bundle must have been built for).
 cp "$REPO/app/AppIcon.icns" "$RES/"
-cp "$REPO/app/updater.mjs" "$REPO/app/bundle-format.mjs" "$REPO/app/release-public.pem" "$RES/"
+cp "$REPO/app/updater.mjs" "$REPO/app/bundle-format.mjs" "$REPO/app/connect-mcp.mjs" "$REPO/app/release-public.pem" "$RES/"
+node "$REPO/scripts/protect.mjs" --version "$VERSION" --in-place "$RES/updater.mjs" "$RES/bundle-format.mjs" "$RES/connect-mcp.mjs"
 printf '%s\n' "$VERSION" > "$RES/sim-eyes/VERSION"
 node --input-type=module -e "
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -66,11 +68,17 @@ const pkg = JSON.parse(readFileSync('$REPO/package.json', 'utf8'));
 writeFileSync('$RES/app.json', JSON.stringify({ hubUrl: '$HUB_URL', appVersion: pkg.version, arch: '$ARCH', depsHash: depsHash(pkg.dependencies, '$AGENT_DEVICE_VERSION') }, null, 2) + '\n');
 "
 
+# 3c. The Swift helpers ship compiled, with no .swift source in the app (ocr.mjs and studio/file-facts.mjs find them through the launcher's env).
+mkdir -p "$RES/bin"
+swiftc -O -target "$ARCH-apple-macos13.0" "$REPO/ocr.swift" -o "$RES/bin/ocr"
+swiftc -O -target "$ARCH-apple-macos13.0" "$REPO/studio/pdf-facts.swift" -o "$RES/bin/pdf-facts"
+
 # 4. Launcher.
 sed "s/__VERSION__/$VERSION/" app/Info.plist > "$APP/Contents/Info.plist"
 swiftc -O -target "$ARCH-apple-macos13.0" app/main.swift -o "$APP/Contents/MacOS/SimEyesStudio"
 
 # 5. Ad-hoc signature (no Developer ID): testers open it once with right-click > Open, see app/README.md.
+if [ -n "$(find "$APP" -name '*.swift' -not -path '*/node_modules/*' -print -quit)" ]; then echo "a .swift file is left in the app: it would show our source" >&2; exit 1; fi
 codesign --force --deep --sign - "$APP"
 codesign --verify --deep --strict "$APP"
 

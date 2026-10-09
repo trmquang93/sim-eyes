@@ -6,30 +6,66 @@ import AppKit
 import Security
 import WebKit
 
+/// HOME as the environment gives it (a check can point it at a throwaway folder); NSHomeDirectory() ignores it.
+let homeDir = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+
 let keychainService = "com.simeyes.studio"
 let keychainAccount = "HUB_INVITE_TOKEN"
 
-func readKey() -> String? {
-  let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: keychainService,
+/// `interactive: false` (the MCP server): a Keychain approval prompt must not hang a client's start-up, so it fails and `goal` is simply off.
+func readKey(interactive: Bool = true) -> String? {
+  var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: keychainService,
                               kSecAttrAccount as String: keychainAccount, kSecReturnData as String: true]
+  if !interactive { query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail }
   var out: AnyObject?
   guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess, let data = out as? Data else { return nil }
   return String(data: data, encoding: .utf8)
 }
 
-func activeKey() -> String? { readKey() }
+var keyIsInteractive = true
+func activeKey() -> String? {
+  if keyIsInteractive { return readKey() }
+  // The old file Keychain asks "allow?" inside the read and ignores the no-UI flag, so a rebuilt (re-signed) app would hang the client's start-up
+  // on a dialog. Wait a few seconds for the answer, then go on without a token: every step except `goal` works.
+  var found: String?
+  let done = DispatchSemaphore(value: 0)
+  DispatchQueue.global().async { found = readKey(interactive: false); done.signal() }
+  if done.wait(timeout: .now() + 3) == .timedOut { log("keychain read timed out: starting without the invite token\n"); return nil }
+  return found
+}
 
-let supportDir = NSHomeDirectory() + "/Library/Application Support/SimEyesStudio"
+let supportDir = homeDir + "/Library/Application Support/SimEyesStudio"
+
+/// The path of this executable with symlinks resolved: `~/.local/sim-eyes/bin/sim-eyes-mcp` points here, and the app can be moved.
+let executablePath: String = {
+  var size: UInt32 = 0
+  _NSGetExecutablePath(nil, &size)
+  var buffer = [CChar](repeating: 0, count: Int(size))
+  _NSGetExecutablePath(&buffer, &size)
+  return URL(fileURLWithPath: String(cString: buffer)).resolvingSymlinksInPath().path
+}()
+
+/// The app's Resources folder, found from the real executable (`Bundle.main` is not trusted when we were started through a symlink).
+let resDir: String = {
+  let candidate = URL(fileURLWithPath: executablePath).deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources").path
+  return FileManager.default.fileExists(atPath: candidate + "/node") ? candidate : Bundle.main.resourcePath!
+}()
+
+let nodePath = resDir + "/node"
+let builtinHomePath = resDir + "/sim-eyes"
+let simPoolPath = resDir + "/sim-pool"
 
 /// What build-app.sh wrote next to the app's code: { hubUrl, appVersion, depsHash }.
 func appConfig() -> [String: Any] {
-  guard let data = try? Data(contentsOf: URL(fileURLWithPath: Bundle.main.resourcePath! + "/app.json")),
+  guard let data = try? Data(contentsOf: URL(fileURLWithPath: resDir + "/app.json")),
         let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
   return json
 }
 
 /// `defaults write com.simeyes.studio hubUrl http://127.0.0.1:8081` points the app at another hub (a local one for checks).
 func hubURL() -> String { UserDefaults.standard.string(forKey: "hubUrl") ?? (appConfig()["hubUrl"] as? String ?? "") }
+
+var appVersionString: String { appConfig()["appVersion"] as? String ?? "0.0.0" }
 
 /// The last line a helper printed, as JSON.
 func parseLine(_ out: String) -> [String: Any]? {
@@ -49,7 +85,8 @@ func saveKey(_ key: String) {
 
 /// Studio's output and exit status, for a tester to send when something breaks: ~/Library/Logs/SimEyesStudio.log
 func log(_ text: String) {
-  let path = NSHomeDirectory() + "/Library/Logs/SimEyesStudio.log"
+  let path = homeDir + "/Library/Logs/SimEyesStudio.log"
+  try? FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
   guard let data = text.data(using: .utf8) else { return }
   if let h = FileHandle(forWritingAtPath: path) { h.seekToEndOfFile(); h.write(data); h.closeFile() } else { FileManager.default.createFile(atPath: path, contents: data) }
 }
@@ -69,6 +106,7 @@ func run(_ path: String, _ args: [String], env: [String: String]? = nil) -> (sta
   p.executableURL = URL(fileURLWithPath: path)
   p.arguments = args
   if let env { p.environment = env }
+  p.standardInput = FileHandle.nullDevice
   let pipe = Pipe()
   p.standardOutput = pipe
   p.standardError = pipe
@@ -78,8 +116,67 @@ func run(_ path: String, _ args: [String], env: [String: String]? = nil) -> (sta
   return (p.terminationStatus, String(data: data, encoding: .utf8) ?? "")
 }
 
+/// What Studio and the MCP server both run with: a short PATH, our sim-pool and agent-device, the compiled helpers, and (with an invite token) TypeSafe through the hub.
+func sharedChildEnv() -> [String: String] {
+  var env = ProcessInfo.processInfo.environment
+  env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"
+  env["SIM_POOL_BIN"] = simPoolPath
+  let ad = try! JSONSerialization.data(withJSONObject: [nodePath, "\(builtinHomePath)/node_modules/agent-device/bin/agent-device.mjs"])
+  env["SIM_EYES_AD"] = String(data: ad, encoding: .utf8)!
+  // The app ships ocr and pdf-facts compiled (no .swift source in it); ocr.mjs and studio/file-facts.mjs read these two.
+  for (name, file) in [("SIM_EYES_OCR_BIN", "ocr"), ("SIM_EYES_PDF_FACTS_BIN", "pdf-facts")] where FileManager.default.isExecutableFile(atPath: "\(resDir)/bin/\(file)") {
+    env[name] = "\(resDir)/bin/\(file)"
+  }
+  // The TypeSafe SDK reads these two: the invite token stands in for the key, and the hub swaps it for the real one.
+  if let token = activeKey(), !hubURL().isEmpty {
+    env["TYPESAFE_API_KEY"] = token
+    env["TYPESAFE_BASE_URL"] = hubURL() + "/typesafe"
+  } else {
+    env.removeValue(forKey: "TYPESAFE_API_KEY")
+    env.removeValue(forKey: "TYPESAFE_BASE_URL")
+  }
+  return env
+}
+
+/// The newest installed bundle that is not marked bad, or the built-in code.
+func pickCode() -> (home: String, version: String, builtin: Bool) {
+  let r = run(nodePath, ["\(resDir)/updater.mjs", "choose", "--dir", supportDir, "--builtin", builtinHomePath, "--builtin-version", appVersionString,
+                         "--node-modules", "\(builtinHomePath)/node_modules"])
+  if let j = parseLine(r.out), let path = j["path"] as? String, let version = j["version"] as? String {
+    return (path, version, (j["builtin"] as? Bool) ?? true)
+  }
+  log("choose failed: \(r.out)\n")
+  return (builtinHomePath, appVersionString, true)
+}
+
+/// A client's command line for the MCP server. Stays valid when the app moves or updates: the link is rewritten at each launch.
+let stableMCPPath = homeDir + "/.local/sim-eyes/bin/sim-eyes-mcp"
+
+/// Points the stable path at this executable: a new symlink renamed over the old one, so a client never sees a missing file.
+func refreshStableLink() {
+  let fm = FileManager.default
+  try? fm.createDirectory(atPath: (stableMCPPath as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+  let tmp = stableMCPPath + ".tmp"
+  unlink(tmp)
+  guard symlink(executablePath, tmp) == 0, rename(tmp, stableMCPPath) == 0 else { log("could not write \(stableMCPPath): errno \(errno)\n"); return }
+}
+
+/// `SimEyesStudio --mcp`: no window, no Dock icon. Replaces this process with the app's Node running the MCP server, so stdin and stdout
+/// belong to the server alone. The working directory is the client's: the server uses it as the lease's worktree. Logs go to the log file only.
+func runMCP() -> Never {
+  keyIsInteractive = false
+  let code = pickCode()
+  let env = sharedChildEnv()
+  log("mcp start code \(code.version) \(code.home) node \(nodePath) typesafe=\(env["TYPESAFE_API_KEY"] == nil ? "none" : "hub")\n")
+  var argv: [UnsafeMutablePointer<CChar>?] = [strdup(nodePath), strdup(code.home + "/cli.mjs"), nil]
+  var envp: [UnsafeMutablePointer<CChar>?] = env.map { strdup("\($0.key)=\($0.value)") } + [nil]
+  execve(nodePath, &argv, &envp)
+  log("mcp exec failed: errno \(errno)\n")
+  exit(127)
+}
+
 final class Studio: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationDelegate {
-  let res = Bundle.main.resourcePath!
+  let res = resDir
   var child: Process?
   var stdinPipe: Pipe?
   var url: URL?
@@ -110,8 +207,10 @@ final class Studio: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationD
     buildWindow()
     window.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
+    refreshStableLink()
     guard preflight() else { setStatus("Cannot start: see the message."); return }
     start()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.offerConnectOnce() }
     checkForUpdate(manual: false)
     updateTimer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in self?.checkForUpdate(manual: false) }
   }
@@ -127,7 +226,7 @@ final class Studio: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationD
       return false
     }
     // First run on this Mac: tell sim-pool which simulators it may lease (it never creates any).
-    if !FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.agent-sim-pool/config.json") {
+    if !FileManager.default.fileExists(atPath: homeDir + "/.agent-sim-pool/config.json") {
       let r = run(simPool, ["init"])
       if r.status != 0 { return alert("Could not set up simulators", r.out) && false }
     }
@@ -136,34 +235,10 @@ final class Studio: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationD
 
   // MARK: Studio process
 
-  func childEnv() -> [String: String] {
-    var env = ProcessInfo.processInfo.environment
-    env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"
-    env["SIM_POOL_BIN"] = simPool
-    let ad = try! JSONSerialization.data(withJSONObject: [node, "\(builtinHome)/node_modules/agent-device/bin/agent-device.mjs"])
-    env["SIM_EYES_AD"] = String(data: ad, encoding: .utf8)!
-    // The TypeSafe SDK reads these two: the invite token stands in for the key, and the hub swaps it for the real one.
-    if let token = activeKey(), !hubURL().isEmpty {
-      env["TYPESAFE_API_KEY"] = token
-      env["TYPESAFE_BASE_URL"] = hubURL() + "/typesafe"
-    } else {
-      env.removeValue(forKey: "TYPESAFE_API_KEY")
-      env.removeValue(forKey: "TYPESAFE_BASE_URL")
-    }
-    return env
-  }
+  func childEnv() -> [String: String] { sharedChildEnv() }
 
   /// The newest installed bundle that is not marked bad, or the built-in code. Never switches while Studio runs: only `start` calls it.
-  func chooseCode() {
-    let r = run(node, ["\(res)/updater.mjs", "choose", "--dir", supportDir, "--builtin", builtinHome, "--builtin-version", appVersion,
-                       "--node-modules", "\(builtinHome)/node_modules"])
-    if let j = parseLine(r.out), let path = j["path"] as? String, let version = j["version"] as? String {
-      home = path; homeVersion = version; homeIsBuiltin = (j["builtin"] as? Bool) ?? true
-    } else {
-      log("choose failed: \(r.out)\n")
-      home = builtinHome; homeVersion = appVersion; homeIsBuiltin = true
-    }
-  }
+  func chooseCode() { (home, homeVersion, homeIsBuiltin) = pickCode() }
 
   func start(port: Int = 4777) {
     url = nil            // a restarted Studio gets a fresh page load, not the old one
@@ -242,6 +317,110 @@ final class Studio: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationD
     tokenButton?.isHidden = activeKey() != nil
   }
 
+  // MARK: MCP (connect the app's MCP server to AI tools)
+
+  /// connect-mcp.mjs prints one JSON value on its last line. It lives in Resources, outside any downloadable bundle.
+  func connectRun(_ args: [String]) -> Any? {
+    let r = run(node, ["\(res)/connect-mcp.mjs"] + args, env: childEnv())
+    guard let line = r.out.split(separator: "\n").last, let data = String(line).data(using: .utf8) else { return nil }
+    return try? JSONSerialization.jsonObject(with: data)
+  }
+
+  static let clientNames = ["claude-code": "Claude Code", "cursor": "Cursor", "claude-desktop": "Claude Desktop"]
+
+  func installedClients() -> [(id: String, name: String, current: [String: Any]?)] {
+    let all = connectRun(["detect"]) as? [[String: Any]] ?? []
+    return all.filter { ($0["installed"] as? Bool) == true }.compactMap { c in
+      guard let id = c["client"] as? String else { return nil }
+      return (id, Studio.clientNames[id] ?? id, c["current"] as? [String: Any])
+    }
+  }
+
+  func describe(_ entry: [String: Any]?) -> String {
+    guard let entry else { return "none" }
+    let command = entry["command"] as? String ?? "?"
+    return ([command] + (entry["args"] as? [String] ?? [])).joined(separator: " ")
+  }
+
+  @objc func connectTools() {
+    refreshStableLink()
+    let clients = installedClients()
+    if clients.isEmpty {
+      _ = alert("No AI tools found", "Claude Code, Cursor and Claude Desktop were not found on this Mac. Choose Copy MCP Command and paste it into your tool's MCP settings.")
+      return
+    }
+    var summary: [String] = []
+    for c in clients {
+      let plan = connectRun(["plan", "--client", c.id, "--command", stableMCPPath]) as? [String: Any] ?? [:]
+      switch plan["action"] as? String ?? "" {
+      case "unchanged": summary.append("\(c.name): already connected")
+      case "replace": summary.append("\(c.name): replace \(describe(plan["before"] as? [String: Any]))")
+      case "invalid-config": summary.append("\(c.name): its config file is not valid JSON, skipped")
+      default: summary.append("\(c.name): add SimEyes")
+      }
+    }
+    guard alert("Connect SimEyes to your AI tools", summary.joined(separator: "\n") + "\n\nCommand: \(stableMCPPath)", buttons: ["Connect", "Cancel"]) else { return }
+    var results: [String] = []
+    for c in clients {
+      var r = connectRun(["apply", "--client", c.id, "--command", stableMCPPath]) as? [String: Any] ?? [:]
+      if r["status"] as? String == "needs-replace" {
+        let old = describe(r["before"] as? [String: Any])
+        if alert("Replace the existing SimEyes entry?", "\(c.name) already has a \"sim-eyes\" server: \(old)", buttons: ["Replace", "Keep it"]) {
+          r = connectRun(["apply", "--client", c.id, "--command", stableMCPPath, "--replace"]) as? [String: Any] ?? [:]
+        } else { results.append("\(c.name): kept your existing entry"); continue }
+      }
+      switch r["status"] as? String ?? "error" {
+      case "ok": results.append("\(c.name): connected")
+      case "claude-not-found", "failed":
+        let command = r["manualCommand"] as? String ?? "claude mcp add --scope user sim-eyes -- \(stableMCPPath)"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(command, forType: .string)
+        results.append("\(c.name): run this in a terminal (copied): \(command)")
+      default: results.append("\(c.name): \(r["reason"] as? String ?? "not changed")")
+      }
+    }
+    let ready = readinessNote()
+    _ = alert("Done", results.joined(separator: "\n") + "\n\nRestart the tool so it picks up SimEyes.\n" + ready)
+  }
+
+  /// `doctor` with the same environment the MCP server gets: what is missing on this Mac, in plain words.
+  func readinessNote() -> String {
+    let r = run(node, ["\(pickCode().home)/cli.mjs", "doctor", "--json"], env: childEnv())
+    guard let data = r.out.data(using: .utf8), let items = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return "Could not check this Mac: \(String(r.out.suffix(200)))" }
+    let problems = items.filter { ($0["status"] as? String) != "pass" }.map { "\(($0["status"] as? String ?? "").uppercased()): \($0["detail"] as? String ?? "")" + (($0["fix"] as? String ?? "").isEmpty ? "" : " (\($0["fix"] as! String))") }
+    return problems.isEmpty ? "This Mac is ready." : problems.joined(separator: "\n")
+  }
+
+  @objc func disconnectTools() {
+    let connected = installedClients().filter { $0.current != nil }
+    if connected.isEmpty { _ = alert("Nothing to disconnect", "SimEyes is not set up in any AI tool."); return }
+    guard alert("Disconnect SimEyes", "Remove the \"sim-eyes\" server from: " + connected.map { $0.name }.joined(separator: ", "), buttons: ["Disconnect", "Cancel"]) else { return }
+    var results: [String] = []
+    for c in connected {
+      let r = connectRun(["remove", "--client", c.id]) as? [String: Any] ?? [:]
+      results.append("\(c.name): " + (r["status"] as? String == "ok" ? "removed" : (r["manualCommand"] as? String ?? r["reason"] as? String ?? "not changed")))
+    }
+    _ = alert("Done", results.joined(separator: "\n"))
+  }
+
+  @objc func copyMCPCommand() {
+    refreshStableLink()
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(stableMCPPath, forType: .string)
+    _ = alert("Copied", "\(stableMCPPath)\n\nAdd it as an MCP server's command in your AI tool (no arguments).")
+  }
+
+  /// Once, after the first successful start: offer to connect. The answer is kept, the menu item stays.
+  func offerConnectOnce() {
+    let file = supportDir + "/mcp-offer.json"
+    if FileManager.default.fileExists(atPath: file) { return }
+    try? FileManager.default.createDirectory(atPath: supportDir, withIntermediateDirectories: true)
+    let yes = alert("Use SimEyes from your AI tools?", "This app includes the SimEyes MCP server. Connect it to Claude Code, Cursor or Claude Desktop now? You can do this later from the SimEyes Studio menu.", buttons: ["Connect…", "Not now"])
+    let record = ["offered": true, "answeredAt": ISO8601DateFormatter().string(from: Date()), "connect": yes] as [String: Any]
+    if let data = try? JSONSerialization.data(withJSONObject: record) { FileManager.default.createFile(atPath: file, contents: data) }
+    if yes { connectTools() }
+  }
+
   // MARK: updates
 
   /// Asks the hub for a newer bundle in the background. A staged bundle starts only when Studio next starts.
@@ -318,7 +497,7 @@ final class Studio: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationD
   @objc func reloadPage() { webView.reload() }
 
   @objc func showTests() {
-    let dir = URL(fileURLWithPath: NSHomeDirectory() + "/sim-eyes-tests")
+    let dir = URL(fileURLWithPath: homeDir + "/sim-eyes-tests")
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     NSWorkspace.shared.open(dir)
   }
@@ -469,6 +648,10 @@ final class Studio: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationD
     app.addItem(withTitle: "Check for Updates", action: #selector(checkNow), keyEquivalent: "u").target = self
     app.addItem(withTitle: "Restart to Update", action: #selector(restartForUpdate), keyEquivalent: "").target = self
     app.addItem(.separator())
+    app.addItem(withTitle: "Connect to AI Tools…", action: #selector(connectTools), keyEquivalent: "").target = self
+    app.addItem(withTitle: "Disconnect from AI Tools…", action: #selector(disconnectTools), keyEquivalent: "").target = self
+    app.addItem(withTitle: "Copy MCP Command", action: #selector(copyMCPCommand), keyEquivalent: "").target = self
+    app.addItem(.separator())
     app.addItem(withTitle: "Show Tests Folder", action: #selector(showTests), keyEquivalent: "").target = self
     app.addItem(withTitle: "Open in Browser", action: #selector(openInBrowser), keyEquivalent: "o").target = self
     app.addItem(.separator())
@@ -496,6 +679,11 @@ final class Studio: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationD
     NSApp.mainMenu = main
   }
 }
+
+// A symlink cannot carry arguments: a client that runs ~/.local/sim-eyes/bin/sim-eyes-mcp gets the MCP server because argv[0] has that name.
+let launchedAsMCP = URL(fileURLWithPath: CommandLine.arguments[0]).lastPathComponent == "sim-eyes-mcp"
+if launchedAsMCP || CommandLine.arguments.contains("--mcp") { runMCP() }
+if CommandLine.arguments.contains("--refresh-link") { refreshStableLink(); exit(0) }
 
 let app = NSApplication.shared
 let delegate = Studio()

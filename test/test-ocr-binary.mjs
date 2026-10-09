@@ -55,6 +55,12 @@ function setup({ files = [PACKAGED, META], meta = { sourceSha256: "src1", sha256
   assert.equal(log.compiled, 1);
 }
 {
+  const { deps, log } = setup({ files: ["/app/bin/ocr"], meta: null });
+  assert.equal(await ensureOcrBinary({ ...deps, prebuilt: "/app/bin/ocr" }), "/app/bin/ocr", "the app's prebuilt binary is used as is: the app has no ocr.swift to hash or compile");
+  assert.equal(log.compiled, 0);
+  assert.equal(await ensureOcrBinary({ ...deps, exists: (p) => p === COMPILED, isFresh: () => true, prebuilt: "/app/missing" }), COMPILED, "a named binary that is not there falls back to the old path");
+}
+{
   const { deps, log } = setup({ files: [COMPILED], fresh: true });
   assert.equal(await ensureOcrBinary(deps), COMPILED, "an up-to-date compiled binary is reused");
   assert.equal(log.compiled, 0);

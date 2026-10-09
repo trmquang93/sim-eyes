@@ -23,7 +23,9 @@ const MAX_RENDERED_PAGES = 8;
 
 let compiling;
 /** The compiled helper's path; compiled when missing or older than its source. A failed compile is tried again next time. */
-export function ensurePdfBinary({ exec = execFileAsync, source = SOURCE, binary = BINARY, exists = existsSync, mtime = (p) => statSync(p).mtimeMs } = {}) {
+export function ensurePdfBinary({ exec = execFileAsync, source = SOURCE, binary = BINARY, exists = existsSync, mtime = (p) => statSync(p).mtimeMs, prebuilt = process.env.SIM_EYES_PDF_FACTS_BIN } = {}) {
+  // The Mac app ships a compiled helper and no .swift source; its launcher names it in SIM_EYES_PDF_FACTS_BIN.
+  if (prebuilt && exists(prebuilt)) return Promise.resolve(prebuilt);
   if (exists(binary) && mtime(binary) >= mtime(source)) return Promise.resolve(binary);
   compiling ??= (async () => {
     await mkdir(dirname(binary), { recursive: true });

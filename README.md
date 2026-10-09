@@ -30,6 +30,8 @@ Any other MCP client takes the same command in its config:
 }
 ```
 
+**Mac app instead of npm:** the downloaded SimEyes Studio app carries the MCP server too. Open the app and choose **Connect to AI Tools…** in its menu: it adds `sim-eyes` to Claude Code, Cursor and Claude Desktop (asks first, keeps your other servers, backs up the file) with the command `~/.local/sim-eyes/bin/sim-eyes-mcp`. Open the app once after moving it so that path is refreshed. Restart the tool afterwards.
+
 Then check this Mac (read-only; it lists what is missing and how to fix it, and exits 1 on a real problem):
 
 ```

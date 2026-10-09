@@ -19,7 +19,7 @@ try {
   assert.ok(page.includes(`href="/downloads/${good.file}"`));
   assert.ok(page.includes("Version 1.5.0") && page.includes("46 MB") && page.includes("Apple silicon"));
   assert.ok(page.includes("b".repeat(64)) && page.includes(`shasum -a 256 ~/Downloads/${good.file}`), "the checksum and the command to check it are shown");
-  assert.ok(page.includes("Open Anyway") && page.includes("Invite Token"), "the first-launch steps a tester gets stuck on are on the page");
+  assert.ok(page.includes("Open Anyway") && page.includes("Invite Token") && page.includes("Connect to AI Tools"), "the first-launch steps a tester gets stuck on are on the page");
   assert.ok(homePage({ latest: { ...good, arch: "x86_64" } }).includes("Intel Macs"));
   assert.ok(page.includes('name="viewport"') && page.includes("prefers-color-scheme: dark"), "readable on a phone and in dark mode");
 

@@ -42,7 +42,9 @@ function run(file, args, timeout) {
  * The binary to run. The package's prebuilt one, when it still matches ocr.swift and is unaltered (both hashes are in
  * `bin/ocr.json`); else the one compiled from ocr.swift on first use (about 30 s), compiled again when the source is newer.
  */
-export async function ensureOcrBinary({ packaged, compiled, source, exists, readJson, hash, chmod, isFresh, compile }) {
+export async function ensureOcrBinary({ packaged, compiled, source, exists, readJson, hash, chmod, isFresh, compile, prebuilt }) {
+  // The Mac app ships a compiled binary and no ocr.swift: its launcher names the binary in SIM_EYES_OCR_BIN. Nothing to hash or compile.
+  if (prebuilt && exists(prebuilt)) return prebuilt;
   if (trustedPackagedBinary({ packaged, source, exists, readJson, hash })) {
     chmod(packaged.binary);
     return packaged.binary;
@@ -76,6 +78,7 @@ function ensureBinary() {
     packaged: PACKAGED,
     compiled: BINARY,
     source: SOURCE,
+    prebuilt: process.env.SIM_EYES_OCR_BIN,
     exists: existsSync,
     readJson: readJsonOrNull,
     hash: sha256File,
@@ -119,7 +122,7 @@ export function ocrForDoctor() {
   const deps = { packaged: PACKAGED, source: SOURCE, exists: existsSync, readJson: readJsonOrNull, hash: sha256File };
   return {
     trusted: () => trustedPackagedBinary(deps),
-    compiled: () => existsSync(BINARY) && compiledIsFresh(BINARY, SOURCE),
+    compiled: () => (!!process.env.SIM_EYES_OCR_BIN && existsSync(process.env.SIM_EYES_OCR_BIN)) || (existsSync(BINARY) && compiledIsFresh(BINARY, SOURCE)),
     run: () =>
       new Promise((resolve) => {
         const png = join(tmpdir(), `sim-eyes-doctor-${process.pid}.png`);

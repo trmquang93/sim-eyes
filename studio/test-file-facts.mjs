@@ -8,7 +8,8 @@ const PDF = (name) => new URL(`./fixtures/pdf/${name}`, import.meta.url).pathnam
 const UDID = "8F395E81-CF05-425A-B3C8-CA63CFDE8FD6";
 
 // The real PDFKit helper, compiled from pdf-facts.swift on this Mac: facts must come from the file, not from a stub.
-const binary = await ensurePdfBinary();
+assert.equal(await ensurePdfBinary({ prebuilt: "/app/bin/pdf-facts", exists: (p) => p === "/app/bin/pdf-facts" }), "/app/bin/pdf-facts", "the app ships pdf-facts compiled and has no .swift: the named binary is used without compiling");
+const binary = await ensurePdfBinary({ prebuilt: undefined });
 const deps = { binary };
 
 const three = await pdfFacts(PDF("color-3-pages-a4.pdf"), deps);

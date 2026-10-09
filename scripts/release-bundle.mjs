@@ -13,30 +13,32 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { SEMVER, canonicalManifest, depsHash, isSafeBundlePath, sha256 } from "../app/bundle-format.mjs";
+import { protectFile } from "./protect.mjs";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 const skipped = (name) => /^(test|eval)-/.test(name);
 const run = promisify(execFile);
 
-/** The files a tester's Mac needs to run Studio and the MCP server: the same set app/build-app.sh puts in the app. */
+/** The files a tester's Mac needs to run Studio and the MCP server: the same set app/build-app.sh puts in the app. No .swift: the app ships ocr and pdf-facts compiled. */
 export async function collectFiles(repo = REPO) {
   const paths = [];
   for (const name of await readdir(repo)) {
-    if ((name.endsWith(".mjs") && !skipped(name)) || name === "ocr.swift" || name === "package.json") paths.push(name);
+    if ((name.endsWith(".mjs") && !skipped(name)) || name === "package.json") paths.push(name);
   }
-  // pdf-facts.swift sits under studio/ (not at the top) because an app already installed only accepts top-level .mjs, ocr.swift and package.json.
-  for (const name of await readdir(join(repo, "studio"))) if ((name.endsWith(".mjs") && !skipped(name)) || name === "pdf-facts.swift") paths.push(`studio/${name}`);
+  for (const name of await readdir(join(repo, "studio"))) if (name.endsWith(".mjs") && !skipped(name)) paths.push(`studio/${name}`);
   for (const name of await readdir(join(repo, "studio", "public"))) paths.push(`studio/public/${name}`);
   return paths.sort();
 }
 
-export async function buildBundle({ repo = REPO, version }) {
+/** `protect: false` is for tests that read the plain source; a release always protects (the signature then covers the protected bytes). */
+export async function buildBundle({ repo = REPO, version, protect = true }) {
   if (!SEMVER.test(version)) throw new Error(`The version must be x.y.z, got ${version}.`);
   const files = [];
   for (const path of await collectFiles(repo)) {
     if (!isSafeBundlePath(path)) throw new Error(`Not a path a bundle may hold: ${path}`);
     const full = join(repo, path);
-    const data = await readFile(full);
+    const plain = await readFile(full);
+    const data = protect ? await protectFile(path, plain, { version }) : plain;
     files.push({ path, mode: (await stat(full)).mode & 0o111 ? "0755" : "0644", sha256: sha256(data), b64: data.toString("base64") });
   }
   const versionFile = Buffer.from(`${version}\n`);

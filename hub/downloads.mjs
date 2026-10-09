@@ -101,7 +101,8 @@ export function homePage({ latest }) {
     <li>Download the app, then double-click the zip. Move <strong>SimEyesStudio</strong> to your Applications folder.</li>
     <li>Open it. macOS will say it cannot verify the app, because it is not notarized yet. Open <strong>System Settings › Privacy &amp; Security</strong>, find the message about SimEyesStudio and choose <strong>Open Anyway</strong>.</li>
     <li>Choose <strong>Invite Token…</strong> in the SimEyes Studio menu and paste the token you were sent. It lets the app get updates and understand your test lines.</li>
-    <li>Studio opens in your browser. Add your app build and write your first test.</li>
+    <li>Studio opens in its own window. Add your app build and write your first test.</li>
+    <li>To use SimEyes from an AI tool (Claude Code, Cursor, Claude Desktop), choose <strong>Connect to AI Tools…</strong> in the SimEyes Studio menu, then restart that tool. The MCP server is inside the app; nothing else to install.</li>
   </ol>
   <p class="note">Prefer Terminal? <code>xattr -dr com.apple.quarantine /Applications/SimEyesStudio.app</code> does the same as Open Anyway.</p>
 
