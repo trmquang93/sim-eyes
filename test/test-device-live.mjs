@@ -76,6 +76,12 @@ try {
   assert.match(text(rec), /record is not supported on a real device/);
 
   // S2: Settings > General > About
+  // Settings keeps its scroll position between runs: go to the top, then down one page only if General is not visible.
+  await call("batch", { session_id: sessionId, app, image: false, continue_on_fail: true, actions: [{ tool: "scroll", direction: "up", times: 8 }] });
+  const start = await call("batch", { session_id: sessionId, app, image: false, actions: [{ tool: "look", controls: true }] });
+  if (!/General \(\d+, \d+\)/.test(text(start))) {
+    await call("batch", { session_id: sessionId, app, image: false, actions: [{ tool: "swipe", from: { x: 197, y: 600 }, to: { x: 197, y: 350 } }] });
+  }
   const about = await call("batch", {
     session_id: sessionId,
     app,
@@ -97,6 +103,19 @@ try {
   save("s3-batch.txt", text(after));
   savePng("s3-after.png", after);
   assert.match(text(after), /screen: "About"/);
+  // S9: a goal on the phone (needs TYPESAFE_API_KEY; skipped, not passed, without it).
+  if (process.env.TYPESAFE_API_KEY) {
+    await call("batch", { session_id: sessionId, app, image: false, continue_on_fail: true, actions: [{ tool: "back" }, { tool: "back" }] });
+    const goal = await call("batch", {
+      session_id: sessionId,
+      app,
+      actions: [{ tool: "goal", goal: "open the About page under General", max_steps: 10 }],
+    });
+    save("s9-goal.txt", text(goal));
+    savePng("s9-goal.png", goal);
+    assert.match(text(goal), /screen: "About"/);
+    assert.doesNotMatch(text(goal), /after 0 step/, "the goal must have navigated, not found About already open");
+  } else console.log("S9 skipped: no TYPESAFE_API_KEY");
 } finally {
   // S5
   if (sessionId) {

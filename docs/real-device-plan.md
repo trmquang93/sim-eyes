@@ -1,6 +1,6 @@
 # Real iPhone/iPad support - Implementation Plan
 
-Status: IMPLEMENTED on `feat/real-device` (2026-10-09), S0-S7 and S10 verified live; S8 N/A, S9 inconclusive (no TYPESAFE_API_KEY), S11 pending. See Progress log.
+Status: IMPLEMENTED on `feat/real-device` (2026-10-09), S0-S7, S9 and S10 verified live; S8 N/A, S11 pending (needs a fresh Claude session). See Progress log.
 
 > **HANDOFF NOTICE - read this before starting work.**
 >
@@ -44,7 +44,7 @@ Evidence dir: `.local/qa-evidence/real-device/` (create it; keep out of git unle
 - [x] **S6** A lock left by a dead pid is reclaimed. Evidence: unit test `test-device-lock.mjs` "reclaims a lock whose pid is dead" + live note in `s6-stale-lock.txt`.
 - [x] **S7** `open reset:true` on the phone fails with the documented message and changes nothing. Evidence: `s7-reset.txt`.
 - [ ] **S8 (N/A: record refused on device)** `record start`/`stop` on the phone returns a contact sheet. Evidence: `s8-sheet.png` + `s8-clip.mp4` path. (Mark N/A with reason if agent-device refuses; do not claim.)
-- [ ] **S9** `goal` ("open the About page") completes on the phone (needs `TYPESAFE_API_KEY`). Evidence: `s9-goal.txt`. If no key, **inconclusive**, not pass.
+- [x] **S9** `goal` ("open the About page") completes on the phone (needs `TYPESAFE_API_KEY`). Evidence: `s9-goal.txt`. If no key, **inconclusive**, not pass.
 - [ ] **S10** Simulator path unchanged: `npm test` green, and `node test/test-recovery-live.mjs` passes on a free simulator (or reported inconclusive if the pool is busy). Evidence: `s10-npm-test.txt`, `s10-recovery-live.txt`.
 - [ ] **S11** A fresh Claude Code session loads the changed `acquire` tool and drives S1-S5 through the real MCP. Evidence: that session's PASS/FAIL/INCONCLUSIVE report in the scratchpad, copied to `s11-fresh-session.md`.
 
@@ -273,6 +273,8 @@ Same steps as Phase 4, run by the implementer, not handed to the owner.
 - 2026-10-09: Committed unrelated work to main (85a... pushed), branch `feat/real-device`. Phase 0 done: see Spike results. Phase 2 screenshot normalization is now required. Next: Phase 1.
 
 - 2026-10-09 (implementation): Phases 1-3 done. New `device-lock.mjs`, `device-target.mjs`, tests, `test/test-device-live.mjs`; `server.mjs` (acquire `target`, device binding, lock, reset refusal, record refusal, 3x screenshot shrink via sips, 600 s first open, `--settle` skipped + 1.2 s wait on taps, runner-restart handling in `runAd`: reads retried, actions never repeated), `binding-prefer.mjs`, `doctor.mjs` (real-device warn check), README "Real device". Divergences from the plan: (1) record is refused on hardware instead of attempted (runner restart kills the clip); (2) `pickDevice` narrows by `devicectl` connected set because agent-device lists an offline iPad as booted; the iPad later came online, so the phone needs `prefer_udid` when both are connected; (3) screenshot normalization is unconditional on devices. Evidence: `.local/qa-evidence/real-device/` (S1-S7 from `test/test-device-live.mjs`; S10 `s10-npm-test.txt` and `s10-recovery-live.txt`). S9 inconclusive: no `TYPESAFE_API_KEY` in this shell. Gotcha: a `record start` on a device leaked an agent-device claim in `~/.agent-device/device-claims/` that blocked the phone (DEVICE_IN_USE) after the owner died; removed by hand. S11 INCONCLUSIVE: a fresh `claude` session could not start ("You've hit your weekly limit", resets 9am Asia/Saigon). Handoff prompt for it is in `.local/s11/prompt.md`; run it in a new session started with `AGENT_DEVICE_IOS_TEAM_ID`, `AGENT_DEVICE_IOS_BUNDLE_ID` and `AGENT_DEVICE_STATE_DIR=/tmp/ad-s11` exported, then copy its report to `.local/qa-evidence/real-device/s11-fresh-session.md`.
+
+- 2026-10-09 (later): S9 passed on the phone with `TYPESAFE_API_KEY` from `~/.zshrc` (`s9-goal.txt`: goal tapped General then About, done p=0.97). `test-device-live.mjs` now resets Settings scroll (up x8, then a 250 pt swipe) because Settings keeps its scroll position between runs and layouts differ. S11 still pending.
 
 ## Spike results
 
