@@ -1,15 +1,11 @@
 import assert from "node:assert/strict";
-import { needsShot, shortBatchReminder } from "../batch-plan.mjs";
+import { shortBatchReminder } from "../batch-plan.mjs";
 
 const steps = [
   { tool: "tap", label: "Files" },
-  { tool: "tap", label: "Home", save: "a.png" },
+  { tool: "tap", label: "Home" },
   { tool: "tap", label: "Done" },
 ];
-// Only a step that saves its screenshot, and the last step, need one.
-assert.deepEqual(steps.map((_, i) => needsShot(steps, i)), [false, true, true]);
-assert.equal(needsShot([{ tool: "look" }], 0), true, "a single step is the last step");
-
 // The reminder comes on the second short driving batch in a row, and goes away after a long one; looks, opens and waits are neutral.
 {
   const short = [{ tool: "tap", label: "Files" }];

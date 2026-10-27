@@ -76,9 +76,9 @@ export const notRunText = (rest) => `${rest.length} remaining step(s) not run: $
 /** What the agent is told when a step needs its help (`n` is the step's number in the whole flow). */
 export function helpRequest(n, rest) {
   const doIt = `Step ${n} needs your help: the exact tap and the goal fallback both failed, so do that tap yourself`;
-  if (rest.length === 0) return `${doIt}, with a batch (for example tap_at with a point read from the screenshot). It was the last step, so nothing remains.`;
+  if (rest.length === 0) return `${doIt}, with a batch (a screenshot step shows the screen; tap_at or agent-device does the tap). It was the last step, so nothing remains.`;
   return [
-    `${doIt}, with a batch (for example tap_at with a point read from the screenshot), then call continue with this session_id.`,
+    `${doIt}, with a batch (a screenshot step shows the screen; tap_at or agent-device does the tap), then call continue with this session_id.`,
     `The batch is paused; ${rest.length} step(s) wait: ${rest.map(describeStep).join("; ")}.`,
     "continue runs them from the screen you leave. A batch of yours does not discard them, even if it fails; continue with discard:true (or release) does.",
   ].join("\n");

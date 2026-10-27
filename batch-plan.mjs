@@ -1,12 +1,4 @@
-/**
- * A batch step only needs a screenshot when someone will see it: the last step (the batch response)
- * or a step that saves it. Every step still reads the screen's accessibility tree for its summary.
- */
-export function needsShot(actions, i) {
-  return i >= actions.length - 1 || !!actions[i].save;
-}
-
-const drives = (a) => !["look", "open", "record", "wait"].includes(a.tool);
+const drives = (a) => !["look", "screenshot", "open", "record", "wait"].includes(a.tool);
 
 /**
  * The reminder for a flow sent a few steps at a time: each batch call costs an agent turn. One short batch is

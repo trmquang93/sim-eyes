@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { adTargetArgs, findAndroidTools, listAvds, androidResetArgs, isAndroidSerial, normalizePlatform, parseWmDensity, scaleAdArgs, screenshotArgs } from "../platform.mjs";
+import { androidAnimationScript, parseAnimationScale, adTargetArgs, findAndroidTools, listAvds, androidResetArgs, isAndroidSerial, normalizePlatform, parseWmDensity, scaleAdArgs, screenshotArgs } from "../platform.mjs";
 
 const SIM = "6A9C6239-5AC1-44E7-8978-677BE2E1B53D";
 
@@ -80,5 +80,12 @@ const dir = (map) => (d) => map[d] ?? null;
 assert.deepEqual(listAvds({ env: {}, home: "/h", readdir: dir({ "/h/.android/avd": ["Pixel_8.ini", "Pixel_8.avd", "s4_qa.ini", "simpool-s4_qa-5556.ini", "simpool-s4_qa-5556.avd"] }) }), ["Pixel_8", "s4_qa"], "AVD names are the .ini names; pool clones are not AVDs");
 assert.deepEqual(listAvds({ env: { ANDROID_AVD_HOME: "/custom" }, home: "/h", readdir: dir({ "/custom": ["x.ini"], "/h/.android/avd": ["y.ini"] }) }), ["x"], "ANDROID_AVD_HOME wins");
 assert.deepEqual(listAvds({ env: {}, home: "/h", readdir: dir({}) }), [], "no folder, no AVDs");
+
+// Animations: turned off for speed, and the emulator's own values must come back on release (a muted emulator would surprise whoever uses it next).
+assert.equal(androidAnimationScript(0), "settings put global window_animation_scale 0; settings put global transition_animation_scale 0; settings put global animator_duration_scale 0");
+const saved = { window_animation_scale: "1.0", transition_animation_scale: null, animator_duration_scale: "0.5" };
+assert.equal(androidAnimationScript(saved), "settings put global window_animation_scale 1.0; settings delete global transition_animation_scale; settings put global animator_duration_scale 0.5", "an unset key is deleted, not set to a guess");
+assert.equal(parseAnimationScale("1.0\n"), "1.0");
+assert.equal(parseAnimationScale("null\n"), null, "adb prints null for an unset key");
 
 console.log("test-platform: ok");

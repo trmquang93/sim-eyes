@@ -83,7 +83,7 @@ An agent drives the simulator through one tool, `batch`, which takes an array of
 { "app": "com.example.app", "actions": [{ "tool": "tap", "label": "Files" }, { "tool": "goal", "goal": "open the Move picker for Sample.pdf", "max_steps": 12 }, { "tool": "drag", "from": "1", "to": "5" }, { "tool": "tap", "label": "Save", "save": "/abs/path/saved.png" }] }
 ```
 
-Batch arguments: `app` (required), `actions`, `image` (return the final screenshot; default `true`) and `continue_on_fail` (keep going after a step stops; default `false`).
+Batch arguments: `app` (required), `actions`, `image` (attach the final screenshot; default `false`: replies are text only, one line per step; use a `screenshot` step for an image and a `look` step for the screen's texts and controls; a stuck step ends with an `agent-device` takeover line for the leased device) and `continue_on_fail` (keep going after a step stops; default `false`).
 
 | Step `tool` | Arguments |
 | --- | --- |

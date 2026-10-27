@@ -42,26 +42,32 @@ try {
   const batch = tools.find((t) => t.name === "batch");
   assert.match(batch.description, /\| step \| Use when \|/);
   // Every screen step is a row of the table, and agents are told what a "not confirmed" result means.
-  for (const name of ["tap", "tap_at", "double_tap", "tap_grid", "back", "scroll", "swipe", "pinch", "type", "key", "drag", "long_press", "wait", "look", "goal", "open", "record"]) {
+  for (const name of ["tap", "tap_at", "double_tap", "tap_grid", "back", "scroll", "swipe", "pinch", "type", "key", "drag", "long_press", "wait", "look", "screenshot", "goal", "run", "launch", "open", "record"]) {
     assert.match(batch.description, new RegExp(`\\| ${name} \\|`), name);
   }
-  assert.match(batch.description, /acted but not confirmed/);
+  assert.match(init.result.instructions, /acted but not confirmed/);
   assert.match(batch.description, /there are no separate tap, swipe, type, look or wait tools/);
   // Agents must be told to queue whole flows, with exact steps where the label is known and a goal where it is not.
-  assert.match(batch.description, /Queue whole flows/);
-  assert.match(init.result.instructions, /Queue whole flows/);
-  assert.match(batch.description, /HOW TO DRIVE \(read before the first call\)/);
-  assert.match(batch.description, /Do NOT add look steps between steps/);
-  assert.match(batch.description, /ONE goal step for the whole stretch, with the end state and room/);
-  assert.match(init.result.instructions, /"tool": "goal"/);
+  assert.match(batch.description, /Queue a whole flow/);
+  assert.match(init.result.instructions, /ONE call per flow/);
+  assert.match(init.result.instructions, /HOW TO DRIVE/);
+  assert.match(init.result.instructions, /Start with run:[\s\S]*one line per screen/);
+  assert.match(init.result.instructions, /"tool":"launch"[\s\S]*Never call simctl or adb/);
+  assert.match(init.result.instructions, /do not use look to find labels/);
+  assert.ok(init.result.instructions.indexOf("Start with run") < init.result.instructions.indexOf("Exact steps"), "run comes before exact steps");
+  assert.match(init.result.instructions, /TEXT ONLY[\s\S]*image only from a screenshot step/);
+  assert.match(init.result.instructions, /WHEN STUCK[\s\S]*takeover line[\s\S]*agent-device/);
+  assert.match(batch.description, /text only[\s\S]*takeover line/);
+  assert.ok(batch.description.length + init.result.instructions.length < 9500, "instructions are re-read every turn: keep them short");
+  assert.match(init.result.instructions, /"tool":"run"/);
   assert.doesNotMatch(batch.description, /"tool":"act"|\| act \|/);
   assert.deepEqual(batch.inputSchema.required, ["app", "actions"]);
   assert.ok(batch.inputSchema.properties.session_id);
   assert.equal(batch.inputSchema.properties.image.type, "boolean");
   assert.equal(batch.inputSchema.properties.continue_on_fail.type, "boolean");
   const step = batch.inputSchema.properties.actions.items.properties;
-  assert.deepEqual(step.tool.enum, ["tap", "tap_at", "double_tap", "tap_grid", "back", "scroll", "swipe", "pinch", "type", "key", "drag", "long_press", "wait", "look", "goal", "open", "record"]);
-  for (const field of ["label", "nth", "x", "y", "dx", "dy", "cols", "rows", "count", "direction", "times", "from", "to", "hold_ms", "text", "into", "submit", "key", "ms", "goal", "max_steps", "wait_ms", "quick", "controls", "reset", "relaunch", "frames", "save"]) {
+  assert.deepEqual(step.tool.enum, ["tap", "tap_at", "double_tap", "tap_grid", "back", "scroll", "swipe", "pinch", "type", "key", "drag", "long_press", "wait", "look", "screenshot", "goal", "run", "launch", "open", "record"]);
+  for (const field of ["label", "nth", "x", "y", "dx", "dy", "cols", "rows", "count", "direction", "times", "from", "to", "hold_ms", "text", "into", "submit", "key", "ms", "goal", "max_steps", "wait_ms", "quick", "controls", "reset", "relaunch", "frames", "save", "path", "id", "args", "activity", "terminate", "check", "task", "until", "shots"]) {
     assert.ok(step[field], field);
   }
   assert.ok(!step.instruction && !step.drag && !step.long_press, "the act fields are gone");
@@ -81,6 +87,8 @@ try {
   assert.match(acquire.inputSchema.properties.platform.description, /default/i);
   assert.ok(!acquire.inputSchema.required.includes("platform"), "platform stays optional");
   assert.match(acquire.description, /Android emulator/);
+  assert.ok(acquire.inputSchema.properties.serial, "acquire takes an emulator serial");
+  assert.match(acquire.inputSchema.properties.serial.description, /already running|running emulator/);
   assert.match(init.result.instructions, /Android emulator/);
 
   const statusTool = tools.find((t) => t.name === "status");
@@ -91,8 +99,8 @@ try {
   assert.deepEqual(cont.inputSchema.required, ["session_id"]);
   assert.match(cont.description, /Resume a batch that paused for help/);
   assert.equal(cont.inputSchema.properties.discard.type, "boolean");
-  assert.match(batch.description, /falls? back|retried as a goal/);
-  assert.match(batch.description, /PAUSES and asks you for help/);
+  assert.match(init.result.instructions, /falls? back|retried as a goal/);
+  assert.match(init.result.instructions, /PAUSES and asks you for help/);
   assert.match(init.result.instructions, /continue/);
   const noPause = (await rpc("tools/call", { name: "continue", arguments: {} })).result;
   assert.equal(noPause.isError, true);

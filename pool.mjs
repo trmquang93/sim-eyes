@@ -169,6 +169,9 @@ export function describeAndroidPoolError(message) {
   if (/unrecognized arguments:.*--platform/.test(message)) {
     return `${message}\nThis sim-pool is too old for Android (it predates --platform). Update the sim-pool skill, remove it so the copy that ships with sim-eyes is used, or set SIM_POOL_BIN to a newer one.`;
   }
+  if (/lock|already running|in use by another/i.test(message) && !/Android SDK tools not found/.test(message)) {
+    return `${message}\nThe AVD looks locked by an emulator that is already running (one you started, or a leftover). Pass serial:"emulator-<port>" to acquire to use that emulator, ask for another AVD with prefer_device, or stop the running one.`;
+  }
   return /Android SDK tools not found/.test(message) ? `${message}.${ANDROID_SDK_HINT}` : message;
 }
 
