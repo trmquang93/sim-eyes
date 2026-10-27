@@ -73,7 +73,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
-    "@typesafe-ai/sdk": "^0.6.0",
+    "@typesafe-ai/sdk": "^0.7.0",
     "agent-device": "0.21.19",
     "zod": "^3.24.2"
   },

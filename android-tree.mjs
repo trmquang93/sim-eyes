@@ -36,7 +36,9 @@ export function normalizeAndroidNodes(raw, { scale = 1 } = {}) {
     const inside = below(n);
     // A container of rows is not a row, and a group around a text box is not tapped as a row.
     if (inside.some(hittableGroup) || inside.some((c) => c.type === "TextField")) continue;
-    const texts = inside.filter((c) => c.type === "StaticText" && c.label);
+    let texts = inside.filter((c) => c.type === "StaticText" && c.label);
+    // An icon-only control (a Compose `+` button) has no TextView: its contentDescription is a labelled child View.
+    if (texts.length === 0) texts = inside.filter((c) => c.label && !hittableGroup(c)).slice(0, 1);
     if (texts.length === 0) continue;
     const title = texts.find((t) => /\/title$/.test(t.identifier ?? "")) ?? texts[0];
     n.type = "Cell";

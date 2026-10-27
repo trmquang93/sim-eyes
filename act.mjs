@@ -1,4 +1,4 @@
-import { choice, noul, TypeSafeClient } from "@typesafe-ai/sdk";
+import { box, choice, image, noul, TypeSafeClient } from "@typesafe-ai/sdk";
 import { formatTree } from "./targets.mjs";
 
 /** Below this, the chosen next action is not trusted and act stops. */
@@ -13,6 +13,10 @@ export const ACT_LEAD_RATIO = 1 / 3;
 export const ACT_DONE_MIN = 0.7;
 /** At or above this, the final confirmation's "achieved" or "not achieved" is believed; below it the goal stays unconfirmed. */
 export const ACT_CONFIRM_MIN = 0.7;
+/** Box answers only on 1.14 (`jev-latest` is 1.13 until it moves); images are on 1.13 and up. */
+export const BOX_MODEL = "jev-1.14.0";
+/** The option that taps a control seen only in the screenshot: its point comes from a Box question, not from a listed control. */
+export const SHOT_OPTION = "tap screenshot";
 export const ACT_DEFAULT_STEPS = 5;
 /** A goal that spans a whole stretch of a flow needs room: the loop stops early once the screen confirms it. */
 export const ACT_MAX_STEPS = 25;
@@ -44,7 +48,7 @@ function tapGroups(targets) {
  * Every action act may take on this screen, keyed by the label TypeSafe picks.
  * Text is never invented: a type option exists only when the caller passed text.
  */
-export function actOptions(targets, { text } = {}) {
+export function actOptions(targets, { text, screenshot = false } = {}) {
   const criteria = {
     none: "Nothing on this screen or reachable by scrolling moves toward the instruction.",
   };
@@ -64,6 +68,11 @@ export function actOptions(targets, { text } = {}) {
       criteria[`type ${field.n}`] = `Fill field #${field.n} ${quoted([field.label])} with \`textToType\``;
       actions[`type ${field.n}`] = { kind: "type", target: field, text };
     }
+  }
+  if (screenshot) {
+    criteria[SHOT_OPTION] =
+      "Tap a control that is visible in `screenshot` but missing from `controls` (an icon-only button such as a close X, a picker row, a view outside the app). Its position is read from the screenshot";
+    actions[SHOT_OPTION] = { kind: "locate" };
   }
   for (const d of SWIPES) {
     criteria[`swipe ${d}`] = SWIPE_MEANING[d];
@@ -103,7 +112,7 @@ export function stepRecord(action, screenTitle, page) {
   if (action.kind === "tap" && action.target.back) {
     return { action: "go back", to: action.target.label, ...on };
   }
-  if (action.kind === "tap") return { action: "tap", control: action.target.label, ...(action.target.ocr ? { readFromScreenshot: true } : {}), ...on };
+  if (action.kind === "tap") return { action: "tap", control: action.target.label, ...(action.target.ocr || action.target.shot ? { readFromScreenshot: true } : {}), ...on };
   if (action.kind === "type") {
     return { action: "fill field", control: action.target.label, text: action.text, submitted: false, ...on };
   }
@@ -184,9 +193,15 @@ export const NEXT_QUESTION = {
   ],
 };
 
-/** The exact state TypeSafe sees; also used by eval-act.mjs. */
-export function actState({ instruction, text, targets, history, screen, context, nodes }) {
+/** Evidence added when the request carries the screen as an image. */
+const SHOT_EVIDENCE =
+  "`screenshot` is the screen shown now as an image, the same screen `controls` and `hierarchy` describe. Take exact labels and `tap` numbers from `controls`. A control that is visible in `screenshot` but missing from `controls` can be tapped with the screenshot option.";
+const withShot = (question, shot) => (shot ? { ...question, evidence: [...question.evidence, SHOT_EVIDENCE] } : question);
+
+/** The exact state TypeSafe sees; also used by eval-act.mjs. `shot` is the screenshot's PNG bytes, sent as an image. */
+export function actState({ instruction, text, targets, history, screen, context, nodes, shot }) {
   return {
+    ...(shot ? { screenshot: image(shot) } : {}),
     ...(nodes?.length ? { hierarchy: formatTree(nodes, targets, { tag: (n) => ` <tap ${n}>` }).split("\n") } : {}),
     instruction,
     textToType: text ?? null,
@@ -210,30 +225,63 @@ export function actState({ instruction, text, targets, history, screen, context,
  * One judgment round: is the instruction already fulfilled, and if not, which single action is next.
  * Both questions go in one request; code uses `next` only when `done` is below ACT_DONE_MIN.
  */
-export async function decideStep({ instruction, text, targets, history, client, screen, context, nodes }) {
-  const { criteria, actions } = actOptions(targets, { text });
+export async function decideStep({ instruction, text, targets, history, client, screen, context, nodes, shot }) {
+  const { criteria, actions } = actOptions(targets, { text, screenshot: Boolean(shot) });
   const response = await client.systemOne({
-    state: actState({ instruction, text, targets, history, screen, context, nodes }),
+    state: actState({ instruction, text, targets, history, screen, context, nodes, shot }),
     questions: {
-      done: noul(DONE_QUESTION, {
+      done: noul(withShot(DONE_QUESTION, shot), {
         true: "The instruction is fulfilled, or its condition does not apply to this screen.",
         false: "At least one more action is needed on this screen or a later one.",
       }),
-      next: choice(NEXT_QUESTION, criteria),
+      next: choice(withShot(NEXT_QUESTION, shot), criteria),
     },
   });
   const next = response.answers.next;
   const [runnerUp] = Object.entries(next.probabilities)
     .filter(([label]) => label !== next.choice)
     .sort((a, b) => b[1] - a[1]);
-  return {
+  const step = {
     runnerUp: runnerUp ? { key: runnerUp[0], probability: runnerUp[1] } : null,
     doneProbability: response.answers.done.noul,
     key: next.choice,
     confidence: next.confidence,
     action: actions[next.choice] ?? null,
   };
+  // The control is not listed: a second request finds it in the screenshot. A point it is not sure of is no action.
+  if (step.action?.kind === "locate" && step.doneProbability < ACT_DONE_MIN) {
+    const found = await locateOnScreenshot({ instruction, history, shot, screen, client });
+    step.action = found.target ? { kind: "tap", target: found.target } : null;
+    step.confidence = Math.min(step.confidence, found.confidence);
+  }
+  return step;
 }
+
+/**
+ * Where on the screenshot to tap next for `instruction`: a Box question (1.14 only) plus a presence question,
+ * because a Box always returns four edges even when nothing matches. The point is the box's centre in screen points
+ * (screenshots are 1x). `target` is null when the control is not there at ACT_CONFIDENCE_MIN.
+ */
+export async function locateOnScreenshot({ instruction, history, shot, screen, client }) {
+  const response = await client.systemOne({
+    model: BOX_MODEL,
+    state: { instruction, stepsTaken: history, screenshot: image(shot) },
+    questions: {
+      present: noul("Is there a control visible in `screenshot` that the agent should tap next to carry out `instruction`?"),
+      where: box("The control in `screenshot` that the agent should tap next to carry out `instruction`"),
+    },
+  });
+  const { present, where } = response.answers;
+  const confidence = Math.min(present.noul, where.confidence ?? present.noul);
+  if (confidence < ACT_CONFIDENCE_MIN) return { target: null, confidence };
+  const { top, bottom, left, right } = where.box;
+  const x = Math.round(((left + right) / 2) * screen.width);
+  const y = Math.round(((top + bottom) / 2) * screen.height);
+  return { target: { n: 0, label: `point (${x}, ${y})`, x, y, exact: true, shot: true }, confidence };
+}
+
+/** Screenshots go to TypeSafe only on a direct key: the hub relay forwards JSON only, and images are multipart. */
+export const screenshotsOn = (env = process.env) => !env.TYPESAFE_BASE_URL;
 
 export function typesafeClient() {
   const apiKey = process.env.TYPESAFE_API_KEY;
@@ -242,7 +290,8 @@ export function typesafeClient() {
       "goal needs TYPESAFE_API_KEY in the sim-eyes MCP env. Every other step (tap, tap_at, back, scroll, swipe, type, key, drag, long_press, wait, look) runs without it."
     );
   }
-  return new TypeSafeClient({ apiKey });
+  // Images are opt-in on the API: every request that carries one needs this header.
+  return new TypeSafeClient({ apiKey, defaultHeaders: { "TypeSafe-Danger-Zone-Images": "true" } });
 }
 
 export const CONFIRM_CRITERIA = {
@@ -255,10 +304,10 @@ export const CONFIRM_CRITERIA = {
  * The last word on a goal that ran out of steps or of confidence: the screen is described to TypeSafe (the same state
  * `decideStep` sees) and it says whether the instruction was achieved. A verdict below ACT_CONFIRM_MIN is "cannot tell".
  */
-export async function confirmGoal({ instruction, text, targets, history, client, screen, context, nodes }) {
+export async function confirmGoal({ instruction, text, targets, history, client, screen, context, nodes, shot }) {
   const response = await client.systemOne({
-    state: actState({ instruction, text, targets, history, screen, context, nodes }),
-    questions: { verdict: choice(CONFIRM_QUESTION, CONFIRM_CRITERIA) },
+    state: actState({ instruction, text, targets, history, screen, context, nodes, shot }),
+    questions: { verdict: choice(withShot(CONFIRM_QUESTION, shot), CONFIRM_CRITERIA) },
   });
   const { choice: verdict, confidence } = response.answers.verdict;
   const believed = confidence >= ACT_CONFIRM_MIN && verdict in CONFIRM_CRITERIA;

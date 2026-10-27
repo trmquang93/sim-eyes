@@ -35,9 +35,11 @@ import {
   EFFECT_BAND,
   confirmGoal,
   decideStep,
+  locateOnScreenshot,
   effectRecord,
   effectText,
   screenSignature,
+  screenshotsOn,
   stepRecord,
   trustedAction,
   typesafeClient,
@@ -720,7 +722,7 @@ async function withOcr(targets) {
 async function runActAction(action) {
   if (action.kind === "tap") {
     await pressPoint(action.target);
-    const via = action.target.ocr ? " (text read from the screenshot)" : "";
+    const via = action.target.shot ? " (found in the screenshot)" : action.target.ocr ? " (text read from the screenshot)" : "";
     return `Tapped #${action.target.n} ${action.target.label}${via}`;
   }
   if (action.kind === "type") {
@@ -796,6 +798,8 @@ async function directTapStep(what, target) {
  */
 async function actOn(instruction, args) {
   const client = typesafeClient();
+  // With a direct key the model sees the screenshot, which replaces the OCR tap targets; through the hub OCR stays.
+  const useShots = screenshotsOn();
   const maxSteps = Math.min(
     Math.max(Math.round(Number(args.max_steps) || ACT_DEFAULT_STEPS), 1),
     ACT_MAX_STEPS
@@ -822,23 +826,27 @@ async function actOn(instruction, args) {
     const cover = await coverOf();
     // What the last action led to, so a goal that passes through a dialog or a menu reports what was on it.
     if (log.length > 0 && !log[log.length - 1].includes(" → ")) log[log.length - 1] += ` → ${cover.hidden ? coveredScreenLine(cover) : screenLine(ctx.lastScreen)}`;
-    if (cover.hidden) {
+    if (cover.hidden && useShots) {
+      targets = [];
+      notices.add("a view outside the app's accessibility tree covers the screen, so the controls are read from the screenshot; open with relaunch:true restarts the app");
+    } else if (cover.hidden) {
       targets = ocrTargets(cover.items);
       notices.add("a view outside the app's accessibility tree covers the screen, so only the text read from the screenshot (OCR) is offered as tap targets; its icon-only buttons (a close X, a checkmark) have no text, and open with relaunch:true restarts the app");
     }
+    const shot = useShots ? await readFile((await currentShot("act-shot")).path) : undefined;
     const decide = () =>
-      decideStep({ instruction, text, targets, history, client, screen: ctx.screenSize, context: cover.hidden ? null : ctx.lastScreen, nodes: cover.hidden ? [] : ctx.lastNodes });
+      decideStep({ instruction, text, targets, history, client, shot, screen: ctx.screenSize, context: cover.hidden ? null : ctx.lastScreen, nodes: cover.hidden ? [] : ctx.lastNodes });
     const useOcr = async (why) => {
       const r = await withOcr(targets);
       if (r.warning) notices.add(r.warning);
       if (r.ocr) notices.add(`${why}, so screenshot text (OCR) is offered as tap targets`);
       targets = r.targets;
     };
-    if (needsOcr(targets)) await useOcr("no control has an accessibility label");
+    if (!useShots && needsOcr(targets)) await useOcr("no control has an accessibility label");
     let step = await decide();
     const settled = () => step.doneProbability >= ACT_DONE_MIN || trustedAction(step, history);
     // Labelled controls can still miss what the goal needs (list rows, ad views): retry once with OCR.
-    if (!settled() && !targets.some((t) => t.ocr)) {
+    if (!useShots && !settled() && !targets.some((t) => t.ocr)) {
       await useOcr("the accessibility controls did not cover the goal");
       step = await decide();
     }
@@ -857,7 +865,7 @@ async function actOn(instruction, args) {
     // Steps ran but the loop is out of steps or confidence: describe the screen to TypeSafe and ask whether the goal was achieved.
     const unconfirmed = async (why) => {
       const { verdict, confidence } = await confirmGoal({
-        instruction, text, targets, history, client, screen: ctx.screenSize, context: cover.hidden ? null : ctx.lastScreen, nodes: cover.hidden ? [] : ctx.lastNodes,
+        instruction, text, targets, history, client, shot, screen: ctx.screenSize, context: cover.hidden ? null : ctx.lastScreen, nodes: cover.hidden ? [] : ctx.lastNodes,
       });
       const p = confidence.toFixed(2);
       if (verdict === "achieved") return finish("done", `done after ${history.length} step(s) (confirmed from the screen: achieved p=${p}).`);
@@ -964,10 +972,23 @@ async function tapExact(args) {
   return directTapStep(`tap ${quoted(target.label)}`, target);
 }
 
-/** The `tap` step: the exact tap, then the same tap as a goal; if both fail the batch asks the agent for help. */
+/**
+ * A tap at the point where TypeSafe sees `label` in the screenshot (image + Box), for a control the tree lists without
+ * a label or not at all (an icon-only button). Null when it cannot run (no direct key: the hub relay carries no images) or finds nothing.
+ */
+async function tapLocated(label) {
+  if (!screenshotsOn() || !process.env.TYPESAFE_API_KEY) return null;
+  await snapshotTargets(); // reads the screen size
+  const shot = await readFile((await currentShot("tap-locate")).path);
+  const { target } = await locateOnScreenshot({ instruction: `tap the control named ${quoted(label)}`, history: [], shot, screen: ctx.screenSize, client: typesafeClient() });
+  return target ? directTapStep(`tap ${quoted(label)} (found in the screenshot at ${target.label})`, target) : null;
+}
+
+/** The `tap` step: the exact tap, then a tap where the screenshot shows the label, then the same tap as a goal; if all fail the batch asks the agent for help. */
 async function tapStep(args) {
   return tapWithFallback(args, {
     direct: tapExact,
+    locate: tapLocated,
     goal: (goal) => actOn(goal, { max_steps: TAP_FALLBACK_STEPS }),
     fatal: (err) => err instanceof PoolBusyError || err instanceof DeviceBusyError || err?.code === "SIM_POOL_BUSY",
   });
@@ -1166,7 +1187,7 @@ Rules:
 - Results: "done" means the step did what it says and the screen changed or the goal was confirmed. "acted but not confirmed" means the tap ran but nothing visibly changed or the goal could not be read from the screen: when the last step visibly changed the screen the batch continues, otherwise it stops. A goal that runs out of steps or confidence is checked once more: the screen is described to TypeSafe, which says achieved (done), not achieved ("stopped": the end state was not reached) or cannot tell (acted but not confirmed). "stopped" or "stuck" means nothing useful happened and the batch stops. Pass continue_on_fail:true on the batch to keep going anyway.
 - A tap that fails (no such label, or the screen did not change) is retried as a goal ("tap <label>") before the batch gives up. If that fails too the batch PAUSES and asks you for help instead of ending: do that one tap yourself with a batch (tap_at with a point from the screenshot, or any steps), then call continue with the session_id. The steps that were waiting run from the screen you leave, and the result continues their numbering. A batch you send meanwhile does not discard them; continue with discard:true (or release) does. With continue_on_fail:true a failed tap does not pause. Any other failed step ends the batch and lists the steps it did not run, so you can send them again. Tapping a control that is already selected (the current tab, the active filter) is done, not a failure.
 - A tap on a control that changes nothing is retried once 3 points off its centre, and the result says so.
-- tap and goal see the accessibility controls. When none has a label, or a view outside the app (Photos picker, permission sheet) covers the screen, they read the screenshot's text (OCR) instead. After every tap the screen before and after is compared, which is how a checkmark or switch is confirmed.`;
+- tap and goal see the accessibility controls. A goal also sees the screenshot (with a direct TypeSafe key) and can tap a control the tree does not list, such as a close X or a view outside the app (Photos picker, permission sheet). A tap, or a goal through a hub, reads the screenshot's text (OCR) when no control has a label or such a view covers the screen. After every tap the screen before and after is compared, which is how a checkmark or switch is confirmed.`;
 
 const INSTRUCTIONS = `sim-eyes drives one leased iOS simulator (or, with acquire platform:"android", one Android emulator) per session_id. ${SESSION_ID_RULE}
 

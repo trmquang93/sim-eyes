@@ -63,6 +63,16 @@ const nested = [
 ];
 assert.deepEqual(listTargets(normalizeAndroidNodes(nested)).map((t) => t.label), ["One", "Two"]);
 
+// Why: an icon-only button (the Compose `+` in the tab bar) has no TextView; its contentDescription is a labelled child
+// View. Without it the control is unlabeled, so `tap "Tạo hoặc tham gia"` finds nothing and agents cannot open the create sheet.
+const iconOnly = [
+  { index: 0, type: "android.view.View", kind: "group", identifier: "tab-plus", rect: { x: 467, y: 2166, width: 147, height: 147 }, enabled: true, hittable: true, depth: 0 },
+  { index: 1, type: "android.view.View", kind: "group", label: "Tạo hoặc tham gia", rect: { x: 504, y: 2203, width: 74, height: 74 }, enabled: true, depth: 1, parentIndex: 0 },
+];
+const plus = listTargets(normalizeAndroidNodes(iconOnly));
+assert.deepEqual(plus.map((t) => t.label), ["Tạo hoặc tham gia"], "an icon-only button is one control, labelled by its icon's description");
+assert.deepEqual([plus[0].x, plus[0].y], [541, 2240], "tapped at the button's centre, not the inner icon's");
+
 // Rows scrolled out of view are in the tree but not on screen: they must not be offered.
 const offscreen = [
   { index: 0, type: "android.widget.LinearLayout", kind: "group", rect: { x: 0, y: 2500, width: 1080, height: 200 }, enabled: true, hittable: true, visibleToUser: false, depth: 0 },

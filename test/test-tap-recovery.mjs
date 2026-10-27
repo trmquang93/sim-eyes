@@ -121,3 +121,27 @@ assert.equal(
   '3 remaining step(s) not run: type "Welcome"; key "return"; look.'
 );
 console.log("test-tap-recovery: ok");
+
+// Why: an icon-only control can be missing from the tree or unlabeled; the screenshot shows it. The Box tap comes
+// before the goal (one TypeSafe request, not a loop), and a tap that works there never reaches the goal.
+{
+  const c = calls();
+  const located = { outcome: "done", landed: true, summary: 'tap "Create": done, tapped point (206, 853), the screen changed.' };
+  const r = await tapWithFallback({ label: "Create" }, { direct: c.direct(new Error("No visible control")), locate: async (l) => (c.log.push(`locate ${l}`), located), goal: c.goal(goalDone) });
+  assert.deepEqual(c.log, ["direct", "locate Create"], "the goal is not run when the screenshot tap landed");
+  assert.equal(r.landed, true);
+  assert.match(r.summary, /exact tap failed[\s\S]*Found it in the screenshot/);
+}
+// Nothing found, a tap that changed nothing, or a locate that cannot run (no key, hub): the goal still gets its turn.
+for (const locate of [async () => null, async () => notConfirmed, async () => { throw new Error("no key"); }]) {
+  const c = calls();
+  const r = await tapWithFallback({ label: "Save" }, { direct: c.direct(new Error("No visible control")), locate, goal: c.goal(goalDone) });
+  assert.deepEqual(c.log, ["direct", 'goal tap "Save"']);
+  assert.equal(r.landed, true);
+}
+{
+  const busy = Object.assign(new Error("pool busy"), { code: "SIM_POOL_BUSY" });
+  const c = calls();
+  await assert.rejects(tapWithFallback({ label: "Save" }, { direct: c.direct(new Error("x")), locate: async () => { throw busy; }, goal: c.goal(goalDone), fatal: (e) => e.code === "SIM_POOL_BUSY" }), /busy/);
+}
+console.log("test-tap-recovery: locate ok");

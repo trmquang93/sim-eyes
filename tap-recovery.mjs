@@ -22,11 +22,12 @@ export function tapResult(what, target, effect, words) {
 const firstLine = (text) => String(text).split("\n")[0];
 
 /**
- * The `tap` step with its two fallbacks: the exact tap by code (`direct`), then the same tap as a model-driven
- * goal (`goal`). If both fail the result has `needsHelp`, and the batch asks the agent to do the tap itself.
- * `fatal(err)` names errors that are no tap's fault (a busy pool) and so are rethrown.
+ * The `tap` step with its fallbacks: the exact tap by code (`direct`), then a tap at the point where the label is
+ * seen in the screenshot (`locate`, an image + Box question; optional, returns null when it cannot run or finds
+ * nothing), then the same tap as a model-driven goal (`goal`). If all fail the result has `needsHelp`, and the batch
+ * asks the agent to do the tap itself. `fatal(err)` names errors that are no tap's fault (a busy pool) and so are rethrown.
  */
-export async function tapWithFallback(args, { direct, goal, fatal = () => false }) {
+export async function tapWithFallback(args, { direct, locate, goal, fatal = () => false }) {
   const label = String(args.label ?? "").trim();
   // A tap without a label is a mistake in the batch, not a tap to rescue.
   if (!label) return direct(args);
@@ -39,7 +40,17 @@ export async function tapWithFallback(args, { direct, goal, fatal = () => false 
     if (fatal(err)) throw err;
     why = err.message;
   }
-  const lead = `tap ${JSON.stringify(label)}: the exact tap failed (${why}).`;
+  let lead = `tap ${JSON.stringify(label)}: the exact tap failed (${why}).`;
+  if (locate) {
+    try {
+      const found = await locate(label);
+      if (found && !stepFailed(found)) return { ...found, summary: `${lead} Found it in the screenshot:\n${found.summary}` };
+      if (found) lead += ` The tap where it was seen in the screenshot failed too (${firstLine(found.summary)}).`;
+    } catch (err) {
+      if (fatal(err)) throw err;
+      lead += ` Looking for it in the screenshot failed (${err.message}).`;
+    }
+  }
   let fallback;
   try {
     fallback = await goal(tapFallbackGoal(label));

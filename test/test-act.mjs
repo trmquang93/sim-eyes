@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { actOptions, actState, ACT_CONFIRM_MIN, CONFIRM_QUESTION, confirmGoal, decideStep, effectRecord, effectText, screenSignature, stepRecord, trustedAction } from "../act.mjs";
+import { actOptions, actState, ACT_CONFIRM_MIN, BOX_MODEL, CONFIRM_QUESTION, confirmGoal, decideStep, effectRecord, effectText, SHOT_OPTION, screenshotsOn, screenSignature, stepRecord, trustedAction } from "../act.mjs";
 import { screenContext } from "../targets.mjs";
 
 const targets = [
@@ -188,6 +188,56 @@ assert.deepEqual(
   assert.equal((await confirmGoal({ ...base, client: clientSaying("not achieved", ACT_CONFIRM_MIN - 0.01) })).verdict, "cannot tell");
   assert.equal((await confirmGoal({ ...base, client: clientSaying("something else", 0.99) })).verdict, "cannot tell", "an unknown label is never believed");
   assert.match(CONFIRM_QUESTION.rules.join(" "), /earlier page/);
+}
+
+// The screenshot replaces OCR text as the way to reach a control the tree does not list (a close X, a picker row).
+// Without the option, the goal could only stop there; the point must come from the Box, never from a guess.
+{
+  const shot = Buffer.from("png");
+  const screen = { width: 400, height: 800 };
+  assert.equal(actOptions(targets).actions[SHOT_OPTION], undefined, "no screenshot, no screenshot option");
+  assert.ok(actOptions(targets, { screenshot: true }).criteria[SHOT_OPTION]);
+  assert.equal(actState({ instruction: "x", targets, history: [], screen }).screenshot, undefined);
+  assert.ok(actState({ instruction: "x", targets, history: [], screen, shot }).screenshot, "the state carries the image only when there is one");
+
+  const clientFor = ({ choiceKey, present, boxAnswer }) => {
+    const requests = [];
+    return {
+      requests,
+      async systemOne(req) {
+        requests.push(req);
+        if (req.model === BOX_MODEL) return { answers: { present: { noul: present }, where: boxAnswer } };
+        return {
+          answers: {
+            done: { noul: 0.05 },
+            next: { choice: choiceKey, confidence: 0.9, probabilities: { [choiceKey]: 0.9, none: 0.1 } },
+          },
+        };
+      },
+    };
+  };
+  const centered = { type: "box", box: { top: 0.1, bottom: 0.2, left: 0.8, right: 0.9 }, confidence: 0.9 };
+
+  const found = clientFor({ choiceKey: SHOT_OPTION, present: 0.95, boxAnswer: centered });
+  const step = await decideStep({ instruction: "close the sheet", targets, history: [], client: found, screen, shot });
+  assert.equal(step.action.kind, "tap");
+  assert.deepEqual([step.action.target.x, step.action.target.y], [340, 120], "the tap lands on the centre of the box, in screen points");
+  assert.equal(trustedAction(step, []), true);
+  assert.equal(stepRecord(step.action, null).readFromScreenshot, true);
+  assert.equal(found.requests.length, 2, "one request to decide, one to locate");
+  assert.equal(found.requests[1].model, BOX_MODEL, "Box answers only on 1.14");
+
+  const absent = clientFor({ choiceKey: SHOT_OPTION, present: 0.1, boxAnswer: centered });
+  const none = await decideStep({ instruction: "close the sheet", targets, history: [], client: absent, screen, shot });
+  assert.equal(none.action, null, "a Box always returns four edges, so a target that is not there must not be tapped");
+  assert.equal(trustedAction(none, []), false);
+
+  const listed = clientFor({ choiceKey: "tap 1", present: 0.95, boxAnswer: centered });
+  await decideStep({ instruction: "open settings", targets, history: [], client: listed, screen, shot });
+  assert.equal(listed.requests.length, 1, "a listed control needs no locate request");
+
+  assert.equal(screenshotsOn({}), true);
+  assert.equal(screenshotsOn({ TYPESAFE_BASE_URL: "https://hub.example" }), false, "the hub relay forwards JSON only, so images stay off through it");
 }
 
 console.log("test-act: ok");
