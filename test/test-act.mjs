@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { actOptions, actState, ACT_CONFIRM_MIN, BOX_MODEL, CONFIRM_QUESTION, confirmGoal, decideStep, effectRecord, effectText, SHOT_OPTION, screenshotsOn, screenSignature, stepRecord, trustedAction } from "../act.mjs";
+import { ACT_VALUES_MIN, fieldValue, actOptions, actState, ACT_CONFIRM_MIN, BOX_MODEL, CONFIRM_QUESTION, confirmGoal, decideStep, effectRecord, effectText, SHOT_OPTION, screenshotsOn, screenSignature, stepRecord, trustedAction } from "../act.mjs";
 import { screenContext } from "../targets.mjs";
 
 const targets = [
@@ -240,4 +240,31 @@ assert.deepEqual(
   assert.equal(screenshotsOn({ TYPESAFE_BASE_URL: "https://hub.example" }), false, "the hub relay forwards JSON only, so images stay off through it");
 }
 
+
+// Why: filling a whole form is one goal only if the caller's text can go into several fields, verbatim, each once.
+{
+  const f1 = { n: 1, label: "TextField", placeholder: "Full name", editable: true, x: 10, y: 10 };
+  const f2 = { n: 2, label: "display-name", placeholder: "An", editable: true, x: 10, y: 50 };
+  assert.equal(fieldValue(f1, { "full name": "Tran Quang" }), "Tran Quang", "matched by placeholder, case aside");
+  assert.equal(fieldValue(f2, { "Full name": "x" }), null, "no entry, no text");
+  const byLabel = actOptions([f1, f2], { values: { "display-name": "Quang" } });
+  assert.deepEqual(Object.keys(byLabel.actions).filter((k) => k.startsWith("type")), ["type 2"]);
+  assert.equal(byLabel.actions["type 2"].text, "Quang");
+  assert.match(byLabel.criteria["type 2"], /"Quang"/, "the model sees the exact text it would type");
+  // A list is used in field order; an entry some field already holds is done, so a goal that resumes mid-form does not retype it.
+  const list = ["Tran Quang", "Quang", "1992"];
+  assert.equal(actOptions([f1, f2], { values: list }).actions["type 1"].text, "Tran Quang");
+  const resumed = actOptions([{ ...f1, value: "Tran Quang" }, f2], { values: list });
+  assert.equal(resumed.actions["type 1"], undefined, "a field holding its text is not offered again");
+  assert.equal(resumed.actions["type 2"].text, "Quang");
+  assert.equal(actOptions([f1, f2], { values: list, filled: 3 }).actions["type 1"], undefined, "all entries used");
+  // Text is never invented: no values and no text means no type option.
+  assert.equal(Object.keys(actOptions([f1, f2], {}).actions).some((k) => k.startsWith("type")), false);
+  // Filling with the caller's own text only moves forward, so it is trusted at a lower bar than a tap.
+  const fill = { action: { kind: "type", target: f1, text: "x", fromValues: true }, confidence: ACT_VALUES_MIN + 0.01 };
+  assert.equal(trustedAction(fill), true);
+  assert.equal(trustedAction({ action: { kind: "tap", target: f1 }, confidence: ACT_VALUES_MIN + 0.01 }), false, "a tap keeps the full bar");
+  // A field's text counts in the screen signature, so typing into it is not "the same screen again".
+  assert.notEqual(screenSignature([f1]), screenSignature([{ ...f1, value: "Tran" }]));
+}
 console.log("test-act: ok");

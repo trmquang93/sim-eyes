@@ -9,6 +9,8 @@ export const ACT_RETRY_MIN = 0.2;
 export const ACT_LEAD_MIN = 0.5;
 /** "Clearly leads": the runner-up has at most this share of the chosen action's confidence. */
 export const ACT_LEAD_RATIO = 1 / 3;
+/** A fill with the caller's `values` is trusted at this confidence. */
+export const ACT_VALUES_MIN = 0.3;
 /** At or above this, the instruction counts as fulfilled. */
 export const ACT_DONE_MIN = 0.7;
 /** At or above this, the final confirmation's "achieved" or "not achieved" is believed; below it the goal stays unconfirmed. */
@@ -44,15 +46,34 @@ function tapGroups(targets) {
   return [...groups.values()];
 }
 
+/** The caller's text for a field, matched by its label or placeholder (case aside); null when none. */
+export function fieldValue(field, values, filled = 0, held = new Set()) {
+  if (!values) return null;
+  // A list is filled in order, one entry per fill step: for apps whose fields have no usable label or placeholder.
+  if (Array.isArray(values)) {
+    if (field.value && values.map(String).includes(field.value)) return null; // this field already holds one of the entries
+    let i = filled;
+    while (i < values.length && held.has(String(values[i]))) i++; // entries some field already holds are done
+    return i < values.length ? String(values[i]) : null;
+  }
+  for (const key of [field.label, field.placeholder]) {
+    if (!key) continue;
+    const hit = Object.keys(values).find((k) => k.toLowerCase() === String(key).toLowerCase());
+    if (hit) return String(values[hit]);
+  }
+  return null;
+}
+
 /**
  * Every action act may take on this screen, keyed by the label TypeSafe picks.
  * Text is never invented: a type option exists only when the caller passed text.
  */
-export function actOptions(targets, { text, screenshot = false } = {}) {
+export function actOptions(targets, { text, values, filled = 0, screenshot = false, taps = false } = {}) {
   const criteria = {
     none: "Nothing on this screen or reachable by scrolling moves toward the instruction.",
   };
   const actions = {};
+  const held = new Set(targets.map((t) => t.value).filter(Boolean));
   for (const group of tapGroups(targets)) {
     const t = group[0];
     const labels = group.map((g) => g.label);
@@ -67,6 +88,13 @@ export function actOptions(targets, { text, screenshot = false } = {}) {
     if (field && text) {
       criteria[`type ${field.n}`] = `Fill field #${field.n} ${quoted([field.label])} with \`textToType\``;
       actions[`type ${field.n}`] = { kind: "type", target: field, text };
+    } else if (field) {
+      // The caller's own text for this field, verbatim; a field that already holds it is done.
+      const want = fieldValue(field, values, filled, held);
+      if (want != null && field.value !== want) {
+        criteria[`type ${field.n}`] = `Fill field #${field.n} ${quoted([field.label])} with ${JSON.stringify(want)} (the caller's text for it, from \`fieldValues\`)`;
+        actions[`type ${field.n}`] = { kind: "type", target: field, text: want, fromValues: true };
+      }
     }
   }
   if (screenshot) {
@@ -74,6 +102,8 @@ export function actOptions(targets, { text, screenshot = false } = {}) {
       "Tap a control that is visible in `screenshot` but missing from `controls` (an icon-only button such as a close X, a picker row, a view outside the app). Its position is read from the screenshot";
     actions[SHOT_OPTION] = { kind: "locate" };
   }
+  // `taps`: only controls on screen (the autonomous run scrolls and presses keys by code, never by the model).
+  if (taps) return { criteria, actions };
   for (const d of SWIPES) {
     criteria[`swipe ${d}`] = SWIPE_MEANING[d];
     actions[`swipe ${d}`] = { kind: "swipe", direction: d };
@@ -97,6 +127,8 @@ export function actOptions(targets, { text, screenshot = false } = {}) {
 export function trustedAction(step, history = []) {
   if (!step.action) return false;
   const last = history[history.length - 1];
+  // Filling a field with the caller's own text only moves forward (a field that holds it is not offered again), so a lower bar is enough.
+  if (step.action.kind === "type" && step.action.fromValues) return step.confidence >= ACT_VALUES_MIN;
   const ocrTap = step.action.kind === "tap" && step.action.target.ocr;
   if (!ocrTap) return step.confidence >= ACT_CONFIDENCE_MIN;
   if (last?.action === "tap" && last.readFromScreenshot && last.effect?.screenChanged === false) {
@@ -140,7 +172,7 @@ export function effectText(effect) {
 
 /** Stable text of what the screen offers, to spot an action repeated on an unchanged screen. */
 export function screenSignature(targets) {
-  return targets.map((t) => `${t.label}@${t.x},${t.y}`).join("|");
+  return targets.map((t) => `${t.label}@${t.x},${t.y}${t.value ? `=${t.value}` : ""}`).join("|");
 }
 
 const EVIDENCE = [
@@ -186,7 +218,9 @@ export const NEXT_QUESTION = {
     "To select a file in a file picker (the Files app browser: a grid or list of items with a date and a size under each name), tap the name of a file row. A file shows a size (KB, MB) and a date under its name, so a control whose text includes a size such as \"104KB\" is a file; a folder shows \"N items\". A file type named in the instruction (pdf) does not have to appear in a name. When the names do not show which file has the type, tap the first file row: a row the picker greys out because the app does not accept its type ignores the tap. A file row in `stepsTaken` whose tap left the screen unchanged is such a disabled row, not a dead end: tap the next file row after it (left to right, top to bottom), and keep going until a tap changes the screen. Tap a file before opening a folder, and never Search, Cancel, the close X or the Recents / Shared / Browse tabs. Only when no file is listed, open a folder or swipe up.",
     "When no control in `controls` names the destination or a screen on the way to it, swipe up: a screen opens scrolled to its top, so rows that are not listed yet are below. Do not tap an unrelated control to look for it. Swipe down only after an earlier swipe up in `stepsTaken` on this screen went past it.",
     "If `textToType` is set and the instruction needs text in a field, fill that field. Focusing a field without filling it does not help.",
+    "If `fieldValues` is set, fill each editable field that has an entry (a `type` option exists only for those not yet holding it) before tapping Continue, Next or any button that leaves the screen. Choose options and toggles the instruction asks for the same way, then continue.",
     "When the last step in `stepsTaken` is \"fill field\" and the instruction asks to search or submit, press return.",
+    "While the keyboard is up (keyboard keys or a Done control are listed) it covers part of the screen: when the control the instruction needs next (a button, an option, another field) is not listed, hide the keyboard first, before swiping.",
     "Go back only when the destination cannot be reached from the current screen.",
     "Never repeat an action from `stepsTaken` that left the screen unchanged, including a tap whose `effect.screenChanged` is false. Tapping a different control is not repeating it.",
     "Pick none when nothing visible or reachable by scrolling helps.",
@@ -199,12 +233,13 @@ const SHOT_EVIDENCE =
 const withShot = (question, shot) => (shot ? { ...question, evidence: [...question.evidence, SHOT_EVIDENCE] } : question);
 
 /** The exact state TypeSafe sees; also used by eval-act.mjs. `shot` is the screenshot's PNG bytes, sent as an image. */
-export function actState({ instruction, text, targets, history, screen, context, nodes, shot }) {
+export function actState({ instruction, text, values, targets, history, screen, context, nodes, shot }) {
   return {
     ...(shot ? { screenshot: image(shot) } : {}),
     ...(nodes?.length ? { hierarchy: formatTree(nodes, targets, { tag: (n) => ` <tap ${n}>` }).split("\n") } : {}),
     instruction,
     textToType: text ?? null,
+    ...(values ? { fieldValues: values } : {}),
     stepsTaken: history,
     currentScreen: context ?? null,
     screen: screen ?? null,
@@ -225,10 +260,10 @@ export function actState({ instruction, text, targets, history, screen, context,
  * One judgment round: is the instruction already fulfilled, and if not, which single action is next.
  * Both questions go in one request; code uses `next` only when `done` is below ACT_DONE_MIN.
  */
-export async function decideStep({ instruction, text, targets, history, client, screen, context, nodes, shot }) {
-  const { criteria, actions } = actOptions(targets, { text, screenshot: Boolean(shot) });
+export async function decideStep({ instruction, text, values, targets, history, client, screen, context, nodes, shot, taps = false }) {
+  const { criteria, actions } = actOptions(targets, { taps, text, values, filled: history.filter((h) => h.action === "fill field").length, screenshot: Boolean(shot) });
   const response = await client.systemOne({
-    state: actState({ instruction, text, targets, history, screen, context, nodes, shot }),
+    state: actState({ instruction, text, values, targets, history, screen, context, nodes, shot }),
     questions: {
       done: noul(withShot(DONE_QUESTION, shot), {
         true: "The instruction is fulfilled, or its condition does not apply to this screen.",
@@ -304,9 +339,9 @@ export const CONFIRM_CRITERIA = {
  * The last word on a goal that ran out of steps or of confidence: the screen is described to TypeSafe (the same state
  * `decideStep` sees) and it says whether the instruction was achieved. A verdict below ACT_CONFIRM_MIN is "cannot tell".
  */
-export async function confirmGoal({ instruction, text, targets, history, client, screen, context, nodes, shot }) {
+export async function confirmGoal({ instruction, text, values, targets, history, client, screen, context, nodes, shot }) {
   const response = await client.systemOne({
-    state: actState({ instruction, text, targets, history, screen, context, nodes, shot }),
+    state: actState({ instruction, text, values, targets, history, screen, context, nodes, shot }),
     questions: { verdict: choice(withShot(CONFIRM_QUESTION, shot), CONFIRM_CRITERIA) },
   });
   const { choice: verdict, confidence } = response.answers.verdict;
