@@ -4,7 +4,7 @@ export function preferDiffersFromBinding(binding, { preferUdid, preferDevice } =
   const udid = preferUdid?.trim();
   const device = preferDevice?.trim();
   if (udid) return binding.udid !== udid;
-  if (device) return binding.name !== device && binding.udid !== device;
+  if (device) return binding.name !== device && binding.cloneOf !== device && binding.udid !== device;
   return false;
 }
 
@@ -13,10 +13,15 @@ export function targetDiffersFromBinding(binding, target = "simulator") {
   return !!binding && (binding.kind ?? "simulator") !== target;
 }
 
+/** A different platform (iOS simulator vs Android emulator) is a different binding; a binding made before Android existed is iOS. */
+export function platformDiffersFromBinding(binding, platform = "ios") {
+  return !!binding && (binding.platform ?? "ios") !== platform;
+}
+
 /** Whether sim-pool gave the simulator that was asked for: by UDID when there is one, else by display name. */
 export function preferHonored(granted, { udid, name } = {}) {
   if (udid) return granted.udid === udid;
-  if (name) return granted.name === name;
+  if (name) return granted.name === name || granted.cloneOf === name; // a clone of the AVD asked for is that AVD
   return true;
 }
 

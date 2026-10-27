@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { parseAcquireOutput, defaultInstanceId, resolveSimPool, findSimPoolBin, ensurePoolConfigured } from "../pool.mjs";
+import { parseAcquireOutput, defaultInstanceId, resolveSimPool, findSimPoolBin, ensurePoolConfigured, buildAcquireArgs, leaseFromOutput, describeAndroidPoolError } from "../pool.mjs";
 
 const parsed = parseAcquireOutput(`
 LEASE_ID=abc-123
@@ -77,3 +77,39 @@ await assert.rejects(
 );
 
 console.log("test-pool: ok");
+
+// Why: iOS acquire must send exactly the arguments it sent before Android existed (no --platform, so an older sim-pool still works).
+const base = { instanceId: "1-ab", project: "sim-eyes", timeout: 5 };
+assert.deepEqual(buildAcquireArgs({ ...base, holderPid: 42 }), [
+  "acquire", "--holder-pid", "42", "--owner", "sim-eyes-1-ab", "--project", "sim-eyes", "--session", "sim-eyes-1-ab", "--timeout", "5",
+]);
+assert.ok(!buildAcquireArgs({ ...base, holderPid: 42, platform: "ios" }).includes("--platform"));
+assert.deepEqual(buildAcquireArgs({ ...base, holderPid: 42, preferUdid: "U", ttl: 60, worktree: "/w" }).slice(-6), ["--worktree", "/w", "--ttl", "60", "--prefer-udid", "U"]);
+
+// Android: --platform android, and a preferred AVD goes as --avd (a UDID means nothing there).
+const android = buildAcquireArgs({ ...base, holderPid: 42, platform: "android", preferDevice: "pixel" });
+assert.ok(android.join(" ").includes("--platform android --avd pixel"));
+assert.ok(!android.includes("--prefer-udid"));
+assert.throws(() => buildAcquireArgs({ ...base, holderPid: 42, platform: "android", preferUdid: "emulator-5554" }), /prefer_device/, "an Android emulator is asked for by AVD name");
+assert.ok(!buildAcquireArgs({ ...base, holderPid: 42, platform: "android" }).includes("--avd"), "no preference: the pool picks the AVD");
+
+// PLATFORM=, CLONE_OF= and the AVD name come back from the pool; a lease from an iOS pool has no PLATFORM and stays iOS.
+const ios = leaseFromOutput("LEASE_ID=l1\nUDID=8F395E81-CF05-425A-B3C8-CA63CFDE8FD6\nSIMULATOR_NAME=iPhone 17\nEXPIRES_AT=2026-10-27T01:00:00+00:00\n", "sess");
+assert.deepEqual(ios, { leaseId: "l1", udid: "8F395E81-CF05-425A-B3C8-CA63CFDE8FD6", name: "iPhone 17", expiresAt: "2026-10-27T01:00:00+00:00", session: "sess", platform: "ios", cloneOf: "" });
+const emu = leaseFromOutput("LEASE_ID=l2\nUDID=emulator-5556\nSIMULATOR_NAME=simpool-pixel-5556\nEXPIRES_AT=x\nPLATFORM=android\nCLONE_OF=pixel\n", "sess");
+assert.equal(emu.platform, "android");
+assert.equal(emu.cloneOf, "pixel");
+assert.equal(emu.name, "simpool-pixel-5556");
+assert.throws(() => leaseFromOutput("EXPIRES_AT=x\n", "sess"), /no LEASE_ID\/UDID/);
+
+// Why: the iOS whitelist check does not apply to Android (the pool finds AVDs on disk), and a missing Android SDK must say so.
+assert.equal(describeAndroidPoolError("Android SDK tools not found: need `emulator` and `adb`"), "Android SDK tools not found: need `emulator` and `adb`. Install Android Studio (or the command-line tools), create an AVD, then retry.");
+assert.equal(describeAndroidPoolError("No Android AVDs: create one in Android Studio, then run: sim-pool init --android"), "No Android AVDs: create one in Android Studio, then run: sim-pool init --android");
+assert.match(describeAndroidPoolError("ANDROID_BOOT_FAILED emulator-5554 not booted after 180s"), /ANDROID_BOOT_FAILED/);
+
+// Why: the user's sim-pool skill wins over the vendored copy, and one from before Android rejects --platform; say so.
+assert.match(describeAndroidPoolError("sim-pool: error: unrecognized arguments: --platform android"), /predates Android|too old/i);
+assert.match(describeAndroidPoolError("sim-pool: error: unrecognized arguments: --platform android"), /update the sim-pool skill/i);
+assert.doesNotMatch(describeAndroidPoolError("SIM_POOL_BUSY"), /too old/i);
+
+console.log("test-pool android: ok");

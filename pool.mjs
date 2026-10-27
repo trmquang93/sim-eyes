@@ -106,12 +106,11 @@ export function parseAcquireOutput(text) {
   return out;
 }
 
-/**
- * Lease a whitelist simulator. Returns { leaseId, udid, name, expiresAt, session }.
- * session is the agent-device session name for this MCP process.
- */
-export async function acquireLease({
+/** The `sim-pool acquire` arguments. iOS sends nothing about the platform, so an older sim-pool keeps working. */
+export function buildAcquireArgs({
   instanceId,
+  holderPid = process.pid,
+  platform = "ios",
   preferUdid,
   preferDevice,
   project = "sim-eyes",
@@ -119,21 +118,14 @@ export async function acquireLease({
   owner,
   ttl,
   timeout = 5,
-} = {}) {
-  const bin = resolveSimPool();
-  if (!bin) {
-    throw new Error(
-      "sim-pool not found: this install is missing its vendored copy (vendor/sim-pool). Reinstall sim-eyes, " +
-        "or install the sim-pool skill, or set SIM_POOL_BIN. Without a pool, parallel agents fight over one simulator."
-    );
-  }
+}) {
   const session = `sim-eyes-${instanceId}`;
   const args = [
     "acquire",
     "--holder-pid",
-    String(process.pid),
+    String(holderPid),
     "--owner",
-    owner ?? `sim-eyes-${instanceId}`,
+    owner ?? session,
     "--project",
     project,
     "--session",
@@ -143,35 +135,78 @@ export async function acquireLease({
   ];
   if (worktree) args.push("--worktree", worktree);
   if (ttl) args.push("--ttl", String(ttl));
-  if (preferUdid) args.push("--prefer-udid", preferUdid);
+  if (platform === "android") {
+    if (preferUdid) throw new Error("An Android emulator is asked for by AVD name: pass prefer_device (not prefer_udid).");
+    args.push("--platform", "android");
+    if (preferDevice) args.push("--avd", preferDevice);
+  } else if (preferUdid) {
+    args.push("--prefer-udid", preferUdid);
+  }
+  return args;
+}
 
-  if (!poolReady) {
-    await ensurePoolConfigured({ run: (initArgs) => run(bin, initArgs, { timeoutMs: 60000 }) });
-    poolReady = true;
-  }
-  const { code, stdout, stderr } = await run(bin, args);
-  if (code === 2) {
-    throw new PoolBusyError(
-      (stderr || stdout).trim() ||
-        "SIM_POOL_BUSY: every whitelisted simulator is leased. Wait, or report QA inconclusive."
-    );
-  }
-  if (code !== 0) {
-    throw new Error((stderr || stdout).trim() || `sim-pool acquire exit ${code}`);
-  }
+/** The lease sim-pool granted, from its KEY=value output. A pool without PLATFORM= is an iOS pool. */
+export function leaseFromOutput(stdout, session, { preferDevice } = {}) {
   const parsed = parseAcquireOutput(stdout);
   if (!parsed.LEASE_ID || !parsed.UDID) {
     throw new Error(`sim-pool acquire returned no LEASE_ID/UDID:\n${stdout}`);
   }
-  // preferDevice is advisory only when prefer-udid wasn't used; pool picks any free.
-  void preferDevice;
   return {
     leaseId: parsed.LEASE_ID,
     udid: parsed.UDID,
     name: parsed.SIMULATOR_NAME ?? preferDevice ?? parsed.UDID,
     expiresAt: parsed.EXPIRES_AT ?? "",
     session,
+    platform: parsed.PLATFORM === "android" ? "android" : "ios",
+    cloneOf: parsed.CLONE_OF ?? "",
   };
+}
+
+const ANDROID_SDK_HINT = " Install Android Studio (or the command-line tools), create an AVD, then retry.";
+
+/** sim-pool's own Android errors are clear; a missing SDK, or a pool from before Android, also gets the next step. */
+export function describeAndroidPoolError(message) {
+  if (/unrecognized arguments:.*--platform/.test(message)) {
+    return `${message}\nThis sim-pool is too old for Android (it predates --platform). Update the sim-pool skill, remove it so the copy that ships with sim-eyes is used, or set SIM_POOL_BIN to a newer one.`;
+  }
+  return /Android SDK tools not found/.test(message) ? `${message}.${ANDROID_SDK_HINT}` : message;
+}
+
+/**
+ * Lease a simulator (or, with platform:"android", an emulator). Returns { leaseId, udid, name, expiresAt, session, platform, cloneOf }.
+ * session is the agent-device session name for this MCP process.
+ */
+export async function acquireLease({ platform = "ios", preferDevice, ...rest } = {}) {
+  const bin = resolveSimPool();
+  if (!bin) {
+    throw new Error(
+      "sim-pool not found: this install is missing its vendored copy (vendor/sim-pool). Reinstall sim-eyes, " +
+        "or install the sim-pool skill, or set SIM_POOL_BIN. Without a pool, parallel agents fight over one simulator."
+    );
+  }
+  const android = platform === "android";
+  const args = buildAcquireArgs({ ...rest, platform, preferDevice });
+  const session = args[args.indexOf("--session") + 1];
+
+  // The iOS whitelist does not apply to Android: the pool finds AVDs on disk.
+  if (!android && !poolReady) {
+    await ensurePoolConfigured({ run: (initArgs) => run(bin, initArgs, { timeoutMs: 60000 }) });
+    poolReady = true;
+  }
+  // An emulator that has to boot (or be cloned first) can take minutes; the pool's own boot timeout is 180 s.
+  const { code, stdout, stderr } = await run(bin, args, { timeoutMs: android ? 330000 : 120000 });
+  if (code === 2) {
+    throw new PoolBusyError(
+      (stderr || stdout).trim() ||
+        `SIM_POOL_BUSY: every ${android ? "emulator slot" : "whitelisted simulator"} is leased. Wait, or report QA inconclusive.`
+    );
+  }
+  if (code !== 0) {
+    const message = (stderr || stdout).trim() || `sim-pool acquire exit ${code}`;
+    throw new Error(android ? describeAndroidPoolError(message) : message);
+  }
+  // preferDevice is advisory for iOS (the pool picks any free one); for Android it is the AVD asked for.
+  return leaseFromOutput(stdout, session, { preferDevice });
 }
 
 export async function renewLease(leaseId) {

@@ -5,6 +5,10 @@ import argparse
 import fcntl
 import json
 import os
+import re
+import shutil
+import signal
+import socket
 import subprocess
 import sys
 import time
@@ -22,6 +26,9 @@ DEFAULT_TIMEOUT = 600
 DEFAULT_TTL = 900
 DEFAULT_POLL = 5
 DEFAULT_PREFER = "shutdown"
+CLONE_UDID_RE = re.compile(
+    r"\(([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\)\.?\s*$"
+)
 
 
 def pool_home() -> Path:
@@ -57,9 +64,23 @@ def config_path(home: Path) -> Path:
     return home / "config.json"
 
 
+def default_ephemeral() -> dict[str, Any]:
+    return {
+        "enabled": True,
+        "clones_only": True,
+        "clone_udid": "",
+        "max_concurrent": 8,
+        "max_devices": 16,
+        "name_prefix": "sim-pool-ephemeral-",
+        "delete_on_release": False,
+    }
+
+
 def default_config() -> dict[str, Any]:
     return {
         "devices": [],
+        "ephemeral_devices": [],
+        "ephemeral": default_ephemeral(),
         "defaults": {
             "timeout_seconds": DEFAULT_TIMEOUT,
             "ttl_seconds": DEFAULT_TTL,
@@ -79,6 +100,21 @@ def load_config(home: Path) -> dict[str, Any]:
     data["defaults"] = defaults
     if "devices" not in data:
         data["devices"] = []
+    if "ephemeral_devices" not in data:
+        data["ephemeral_devices"] = []
+    ephemeral = default_ephemeral()
+    ephemeral.update(data.get("ephemeral", {}))
+    flag = os.environ.get("SIM_POOL_EPHEMERAL", "").strip().lower()
+    if flag in ("0", "false", "no", "off"):
+        ephemeral["enabled"] = False
+    elif flag in ("1", "true", "yes", "on"):
+        ephemeral["enabled"] = True
+    clone_flag = os.environ.get("SIM_POOL_CLONES_ONLY", "").strip().lower()
+    if clone_flag in ("0", "false", "no", "off"):
+        ephemeral["clones_only"] = False
+    elif clone_flag in ("1", "true", "yes", "on"):
+        ephemeral["clones_only"] = True
+    data["ephemeral"] = ephemeral
     return data
 
 
@@ -163,7 +199,9 @@ def remove_lease(path: Path) -> bool:
     return False
 
 
-def simctl_devices() -> dict[str, dict[str, Any]]:
+def simctl_devices(iphone_only: bool = False) -> dict[str, dict[str, Any]]:
+    # Ephemeral clones are named "sim-pool-ephemeral-*" (no "iPhone"), so lease/GC lookups
+    # must see every iOS device; only template discovery filters to iPhones.
     try:
         proc = subprocess.run(
             ["xcrun", "simctl", "list", "devices", "available", "-j"],
@@ -183,7 +221,7 @@ def simctl_devices() -> dict[str, dict[str, Any]]:
                 continue
             name = device.get("name", "")
             udid = device.get("udid", "")
-            if not udid or "iPhone" not in name:
+            if not udid or (iphone_only and "iPhone" not in name):
                 continue
             state = device.get("state", "Shutdown")
             out[udid] = {"name": name, "state": state, "runtime": runtime}
@@ -191,7 +229,7 @@ def simctl_devices() -> dict[str, dict[str, Any]]:
 
 
 def discover_iphone_udids(limit: int = 10) -> list[str]:
-    devices = simctl_devices()
+    devices = simctl_devices(iphone_only=True)
     preferred = (
         "iPhone 16 Pro",
         "iPhone 16",
@@ -240,35 +278,97 @@ def active_leases(home: Path, config: dict[str, Any]) -> dict[str, dict[str, Any
     return leases
 
 
-def should_drop_lease(lease: dict[str, Any], config: dict[str, Any], now: datetime | None = None) -> tuple[bool, str]:
+def should_drop_lease(
+    lease: dict[str, Any],
+    config: dict[str, Any],
+    now: datetime | None = None,
+    sim_info: dict[str, dict[str, Any]] | None = None,
+    android_serials: set[str] | None = None,
+) -> tuple[bool, str]:
     now = now or datetime.now(timezone.utc)
     ttl = int(config["defaults"].get("ttl_seconds", DEFAULT_TTL))
     if lease_corrupt(lease, ttl, now):
         return True, "corrupt"
+    udid = lease.get("udid", "")
+    if (
+        udid
+        and sim_info is not None
+        and is_ephemeral_udid(config, udid)
+        and udid not in sim_info
+    ):
+        return True, "missing_sim"
     pid = int(lease.get("pid", 0))
     if not pid_alive(pid):
         return True, "dead_pid"
+    if is_android_lease(lease) and android_lease_gone(lease, android_serials, now):
+        return True, "missing_emulator"
     if lease_expired(lease, now):
         return True, "expired"
     return False, ""
 
 
+def is_ghost_ephemeral(
+    config: dict[str, Any],
+    udid: str,
+    sim_info: dict[str, dict[str, Any]],
+    now: datetime | None = None,
+) -> bool:
+    """An ephemeral clone is a ghost once it has been missing from CoreSimulator for a while.
+
+    The grace period covers freshly provisioned clones (sim_info may be slightly stale)
+    and test doubles with synthetic UDIDs; lease GC handles vanished clones immediately.
+    """
+    now = now or datetime.now(timezone.utc)
+    entry = next((e for e in config.get("ephemeral_devices", []) if e.get("udid") == udid), None)
+    if entry is None or udid in sim_info:
+        return False
+    try:
+        age = (now - parse_iso(entry.get("created_at", ""))).total_seconds()
+    except ValueError:
+        age = 0
+    return age >= 600
+
+
+def prune_ephemeral_not_in_simctl(home: Path, config: dict[str, Any], sim_info: dict[str, dict[str, Any]]) -> None:
+    """Drop registry entries for clones that CoreSimulator no longer has and nothing leases."""
+    for entry in list(config.get("ephemeral_devices", [])):
+        udid = entry.get("udid", "")
+        if not udid or lease_path(home, udid).is_file():
+            continue
+        if is_ghost_ephemeral(config, udid, sim_info):
+            remove_ephemeral_device(home, config, udid)
+
+
 def gc(home: Path, config: dict[str, Any]) -> list[str]:
     dropped: list[str] = []
+    sim_info = simctl_devices()
     leases_dir = home / "leases"
-    if not leases_dir.is_dir():
-        return dropped
-    for path in sorted(leases_dir.glob("*.json")):
-        lease = read_lease(path)
-        if not lease:
-            path.unlink(missing_ok=True)
-            dropped.append(path.stem)
-            continue
-        drop, reason = should_drop_lease(lease, config)
-        if drop:
-            udid = lease.get("udid", path.stem)
-            remove_lease(path)
-            dropped.append(f"{udid}:{reason}")
+    android_listed: list[set[str] | None] = []
+
+    def listed_android() -> set[str] | None:
+        if not android_listed:
+            android_listed.append(adb_serials())
+        return android_listed[0]
+
+    if leases_dir.is_dir():
+        for path in sorted(leases_dir.glob("*.json")):
+            lease = read_lease(path)
+            if not lease:
+                path.unlink(missing_ok=True)
+                dropped.append(path.stem)
+                continue
+            drop, reason = should_drop_lease(
+                lease, config, sim_info=sim_info, android_serials=listed_android() if is_android_lease(lease) else None
+            )
+            if drop:
+                udid = lease.get("udid", path.stem)
+                if reason == "missing_sim":
+                    remove_ephemeral_device(home, config, udid)
+                else:
+                    cleanup_ephemeral_lease(home, config, lease)
+                remove_lease(path)
+                dropped.append(f"{udid}:{reason}")
+    prune_ephemeral_not_in_simctl(home, config, sim_info)
     return dropped
 
 
@@ -286,6 +386,248 @@ def leased_udids(home: Path, config: dict[str, Any]) -> set[str]:
         if udid:
             out.add(udid)
     return out
+
+
+def pool_device_udids(config: dict[str, Any]) -> list[str]:
+    ephemeral = [e["udid"] for e in config.get("ephemeral_devices", []) if e.get("udid")]
+    return list(config.get("devices", [])) + ephemeral
+
+
+def clones_only_mode(config: dict[str, Any]) -> bool:
+    return bool(config.get("ephemeral", {}).get("clones_only", True))
+
+
+def template_udids(config: dict[str, Any]) -> set[str]:
+    templates = set(config.get("devices", []))
+    clone = (config.get("ephemeral", {}) or {}).get("clone_udid", "")
+    if isinstance(clone, str) and clone.strip():
+        templates.add(clone.strip())
+    return templates
+
+
+def is_template_udid(config: dict[str, Any], udid: str) -> bool:
+    return udid in template_udids(config)
+
+
+def leasable_udids(config: dict[str, Any]) -> list[str]:
+    if clones_only_mode(config):
+        return [e["udid"] for e in config.get("ephemeral_devices", []) if e.get("udid")]
+    return pool_device_udids(config)
+
+
+def is_ephemeral_udid(config: dict[str, Any], udid: str) -> bool:
+    return any(e.get("udid") == udid for e in config.get("ephemeral_devices", []))
+
+
+def simslim_available() -> bool:
+    try:
+        subprocess.run(
+            ["simslim", "list"],
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def resolve_clone_source_udid(config: dict[str, Any], sim_info: dict[str, dict[str, Any]]) -> str | None:
+    ephem = config.get("ephemeral", {})
+    preferred = (ephem.get("clone_udid") or "").strip()
+    if preferred and preferred in sim_info:
+        return preferred
+    for udid in config.get("devices", []):
+        if udid in sim_info:
+            return udid
+    prefix = ephem.get("name_prefix", "sim-pool-ephemeral-")
+    for udid, info in sim_info.items():
+        name = info.get("name", "")
+        if "iPhone" in name and not name.startswith(prefix):
+            return udid
+    return None
+
+
+def count_ephemeral_leases(home: Path, config: dict[str, Any]) -> int:
+    count = 0
+    for path in (home / "leases").glob("*.json"):
+        lease = read_lease(path)
+        if not lease:
+            continue
+        drop, _ = should_drop_lease(lease, config)
+        if drop:
+            continue
+        if is_android_lease(lease):
+            continue
+        if lease.get("ephemeral") or is_ephemeral_udid(config, lease.get("udid", "")):
+            count += 1
+    return count
+
+
+def can_provision_ephemeral(home: Path, config: dict[str, Any]) -> bool:
+    ephem = config.get("ephemeral", {})
+    if not ephem.get("enabled", True):
+        return False
+    if not simslim_available() and not os.environ.get("SIM_POOL_TEST_PROVISION_UDID"):
+        return False
+    max_devices = int(ephem.get("max_devices", 16))
+    max_concurrent = int(ephem.get("max_concurrent", 8))
+    ephemeral_count = len(config.get("ephemeral_devices", []))
+    if ephemeral_count >= max_devices:
+        return False
+    if count_ephemeral_leases(home, config) >= max_concurrent:
+        return False
+    return True
+
+
+def parse_clone_udid(output: str) -> str | None:
+    for line in output.splitlines():
+        match = CLONE_UDID_RE.search(line.strip())
+        if match:
+            return match.group(1)
+    return None
+
+
+def add_ephemeral_device(home: Path, config: dict[str, Any], udid: str, name: str, source_udid: str) -> None:
+    devices = list(config.get("ephemeral_devices", []))
+    if any(e.get("udid") == udid for e in devices):
+        return
+    devices.append(
+        {
+            "udid": udid,
+            "name": name,
+            "clone_source": source_udid,
+            "created_at": now_iso(),
+        }
+    )
+    config["ephemeral_devices"] = devices
+    save_config(home, config)
+
+
+def remove_ephemeral_device(home: Path, config: dict[str, Any], udid: str) -> None:
+    # Read-modify-write against the disk state: concurrent sim-pool processes may have
+    # added entries since this process loaded its config; a wholesale save would clobber them.
+    fresh = load_config(home)
+    fresh["ephemeral_devices"] = [
+        e for e in fresh.get("ephemeral_devices", []) if e.get("udid") != udid
+    ]
+    save_config(home, fresh)
+    config["ephemeral_devices"] = fresh["ephemeral_devices"]
+
+
+def destroy_ephemeral_simulator(udid: str) -> None:
+    subprocess.run(["simslim", "shutdown", udid], capture_output=True, text=True)
+    subprocess.run(["simslim", "delete", udid], capture_output=True, text=True)
+
+
+def cleanup_ephemeral_lease(home: Path, config: dict[str, Any], lease: dict[str, Any]) -> None:
+    if is_android_lease(lease):
+        cleanup_android_lease(lease)
+        return
+    if not lease.get("ephemeral"):
+        return
+    if not config.get("ephemeral", {}).get("delete_on_release", False):
+        return
+    udid = lease.get("udid", "")
+    if not udid:
+        return
+    destroy_ephemeral_simulator(udid)
+    remove_ephemeral_device(home, config, udid)
+
+
+def provision_ephemeral_simulator(home: Path, config: dict[str, Any]) -> str | None:
+    test_udid = os.environ.get("SIM_POOL_TEST_PROVISION_UDID", "").strip()
+    if test_udid:
+        add_ephemeral_device(home, config, test_udid, "test-ephemeral", "test")
+        return test_udid
+
+    sim_info = simctl_devices()
+    source = resolve_clone_source_udid(config, sim_info)
+    if not source:
+        return None
+    prefix = config.get("ephemeral", {}).get("name_prefix", "sim-pool-ephemeral-")
+    name = f"{prefix}{uuid.uuid4().hex[:8]}"
+    output = ""
+    try:
+        proc = subprocess.run(
+            ["simslim", "clone", source, name],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        output = (proc.stdout or "") + (proc.stderr or "")
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        output = (getattr(exc, "stdout", "") or "") + (getattr(exc, "stderr", "") or "")
+        err = output.strip() or str(exc)
+        print(f"EPHEMERAL_PROVISION_FAILED {err}", file=sys.stderr)
+        # fall through: the simctl clone step may have succeeded even when a later
+        # simslim step (boot/slim) failed — adopt the device instead of orphaning it
+    new_udid = parse_clone_udid(output)
+    if not new_udid:
+        new_udid = next(
+            (udid for udid, info in simctl_devices().items() if info.get("name") == name),
+            None,
+        )
+    if not new_udid:
+        print(f"EPHEMERAL_PROVISION_FAILED could not parse clone output: {output}", file=sys.stderr)
+        return None
+    add_ephemeral_device(home, config, new_udid, name, source)
+    return new_udid
+
+
+def ephemeral_enabled_for_acquire(args: argparse.Namespace, config: dict[str, Any]) -> bool:
+    if getattr(args, "no_ephemeral", False):
+        return False
+    return bool(config.get("ephemeral", {}).get("enabled", True))
+
+
+def should_provision_clone(args: argparse.Namespace, home: Path, config: dict[str, Any]) -> bool:
+    if getattr(args, "no_ephemeral", False):
+        return False
+    if not ephemeral_enabled_for_acquire(args, config):
+        return False
+    if not can_provision_ephemeral(home, config):
+        return False
+    prefer = config["defaults"].get("prefer", DEFAULT_PREFER)
+    return pick_free_udid(home, config, None, prefer) is None
+
+
+def grant_lease(
+    home: Path,
+    config: dict[str, Any],
+    udid: str,
+    owner: str,
+    args: argparse.Namespace,
+    ttl: int,
+) -> int:
+    lease_id = str(uuid.uuid4())
+    acquired_at = now_iso()
+    expires_at = datetime.now(timezone.utc).timestamp() + ttl
+    expires_iso = datetime.fromtimestamp(expires_at, timezone.utc).replace(microsecond=0).isoformat()
+    sim_info = simctl_devices()
+    name = sim_info.get(udid, {}).get("name", "unknown")
+    ephemeral = is_ephemeral_udid(config, udid)
+    lease = {
+        "lease_id": lease_id,
+        "udid": udid,
+        "owner": owner,
+        "pid": resolve_holder_pid(args.holder_pid),
+        "project": args.project or "",
+        "worktree": args.worktree or "",
+        "session": args.session or "",
+        "purpose": args.purpose or "qa",
+        "acquired_at": acquired_at,
+        "expires_at": expires_iso,
+        "ephemeral": ephemeral,
+    }
+    write_lease(lease_path(home, udid), lease)
+    print(f"LEASE_ID={lease_id}")
+    print(f"UDID={udid}")
+    print(f"SIMULATOR_NAME={name}")
+    print(f"EXPIRES_AT={expires_iso}")
+    print(f"EPHEMERAL={'true' if ephemeral else 'false'}")
+    return EXIT_OK
 
 
 def device_sort_key(
@@ -308,15 +650,20 @@ def pick_free_udid(
     prefer_udid: str | None,
     prefer: str,
 ) -> str | None:
-    devices = config.get("devices", [])
+    devices = leasable_udids(config)
     if not devices:
         return None
     leased = leased_udids(home, config)
     sim_info = simctl_devices()
-    free = [udid for udid in devices if udid not in leased]
+    free = [
+        udid
+        for udid in devices
+        if udid not in leased
+        and (not is_ephemeral_udid(config, udid) or not is_ghost_ephemeral(config, udid, sim_info))
+    ]
     if not free:
         return None
-    if prefer_udid and prefer_udid in free:
+    if prefer_udid and prefer_udid in free and not is_template_udid(config, prefer_udid):
         return prefer_udid
     free.sort(key=lambda u: device_sort_key(u, sim_info, prefer))
     return free[0]
@@ -330,21 +677,491 @@ def find_lease_by_id(home: Path, lease_id: str) -> tuple[Path | None, dict[str, 
     return None, None
 
 
+# ---------------------------------------------------------------------------
+# Android emulators: leases keyed by adb serial (emulator-<port>), one emulator per lease,
+# started read-only so several instances can share one AVD, stopped on release / GC.
+# ---------------------------------------------------------------------------
+
+ANDROID_DEFAULTS: dict[str, Any] = {
+    "avds": [],
+    "base_port": 5554,
+    "max_port": 5584,  # adb only scans emulator console ports 5554-5585
+    "max_concurrent": 4,
+    "boot_timeout": 180,
+    "headless": True,
+    "gpu": "swiftshader_indirect",
+    "clone_on_busy": True,
+}
+CLONE_PREFIX = "simpool-"  # AVD clones the pool made: never listed as AVDs, deleted on release
+ANDROID_BOOT_GRACE = 30
+ANDROID_SERIAL_RE = re.compile(r"^emulator-(\d+)$")
+
+
+def android_config(config: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(ANDROID_DEFAULTS)
+    merged.update(config.get("android") or {})
+    return merged
+
+
+def is_android_lease(lease: dict[str, Any]) -> bool:
+    return lease.get("platform") == "android"
+
+
+def _first_executable(candidates: list[str | None]) -> str | None:
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def android_sdk_roots() -> list[Path]:
+    roots = [os.environ.get("ANDROID_HOME"), os.environ.get("ANDROID_SDK_ROOT")]
+    roots += [str(Path.home() / "Library/Android/sdk"), "/opt/homebrew/share/android-commandlinetools"]
+    return [Path(r) for r in roots if r]
+
+
+def adb_bin() -> str | None:
+    return _first_executable(
+        [os.environ.get("SIM_POOL_ADB"), shutil.which("adb")]
+        + [str(root / "platform-tools" / "adb") for root in android_sdk_roots()]
+    )
+
+
+def emulator_bin() -> str | None:
+    return _first_executable(
+        [os.environ.get("SIM_POOL_EMULATOR"), shutil.which("emulator")]
+        + [str(root / "emulator" / "emulator") for root in android_sdk_roots()]
+    )
+
+
+def adb_run(args: list[str], timeout: int = 15) -> str | None:
+    adb = adb_bin()
+    if not adb:
+        return None
+    try:
+        proc = subprocess.run([adb, *args], capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def adb_serials() -> set[str] | None:
+    """Serials adb lists in any state; None when adb is missing or fails (callers then assume nothing)."""
+    out = adb_run(["devices"])
+    if out is None:
+        return None
+    serials: set[str] = set()
+    for line in out.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) >= 2:
+            serials.add(parts[0])
+    return serials
+
+
+def android_avd_dir() -> Path:
+    if os.environ.get("ANDROID_AVD_HOME"):
+        return Path(os.environ["ANDROID_AVD_HOME"])
+    if os.environ.get("ANDROID_USER_HOME"):
+        return Path(os.environ["ANDROID_USER_HOME"]) / "avd"
+    return Path.home() / ".android" / "avd"
+
+
+def discover_avds() -> list[str]:
+    """AVD names are the `.ini` file names: `medium_phone.ini` may point at a differently named `.avd` folder."""
+    directory = android_avd_dir()
+    if not directory.is_dir():
+        return []
+    return sorted(p.stem for p in directory.glob("*.ini") if not p.stem.startswith(CLONE_PREFIX))
+
+
+def android_leases(home: Path) -> list[tuple[Path, dict[str, Any]]]:
+    out: list[tuple[Path, dict[str, Any]]] = []
+    for path in sorted((home / "leases").glob("*.json")):
+        lease = read_lease(path)
+        if lease and is_android_lease(lease):
+            out.append((path, lease))
+    return out
+
+
+def serial_port(serial: str) -> int | None:
+    match = ANDROID_SERIAL_RE.match(serial or "")
+    return int(match.group(1)) if match else None
+
+
+def port_pair_free(port: int) -> bool:
+    """An emulator uses the console port and the next one (adb)."""
+    for candidate in (port, port + 1):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            try:
+                sock.bind(("127.0.0.1", candidate))
+            except OSError:
+                return False
+    return True
+
+
+def pick_android_port(home: Path, acfg: dict[str, Any], listed: set[str]) -> int | None:
+    used = {serial_port(s) for s in listed} | {serial_port(l.get("udid", "")) for _, l in android_leases(home)}
+    for port in range(int(acfg["base_port"]), int(acfg["max_port"]) + 1, 2):
+        if port in used or not port_pair_free(port):
+            continue
+        return port
+    return None
+
+
+def android_lease_gone(lease: dict[str, Any], serials: set[str] | None, now: datetime) -> bool:
+    """The emulator left adb after its boot window (a crash, or someone killed it)."""
+    if serials is None or lease.get("udid") in serials:
+        return False
+    try:
+        booted_by = parse_iso(lease["acquired_at"]).timestamp() + int(lease.get("boot_timeout", 180)) + ANDROID_BOOT_GRACE
+    except (KeyError, ValueError):
+        return True
+    return now.timestamp() > booted_by
+
+
+def emulator_process_matches(pid: int, port: int | None) -> bool:
+    """Guard against pid reuse: only signal a process that was started with this lease's `-port`."""
+    if pid <= 0 or port is None or not pid_alive(pid):
+        return False
+    try:
+        cmd = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True).stdout
+    except OSError:
+        return False
+    return f"-port {port}" in cmd
+
+
+def _wait_until(predicate, seconds: float) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.2)
+    return predicate()
+
+
+def stop_android_emulator(lease: dict[str, Any]) -> None:
+    serial = lease.get("udid", "")
+    port = serial_port(serial)
+    pid = int(lease.get("emulator_pid") or 0)
+    if serial in (adb_serials() or set()):
+        adb_run(["-s", serial, "emu", "kill"])
+    if emulator_process_matches(pid, port):
+        _wait_until(lambda: not pid_alive(pid), 10)
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        if not emulator_process_matches(pid, port):
+            return
+        try:
+            os.killpg(pid, sig)  # started with start_new_session, so pgid == pid
+        except OSError:
+            return
+        _wait_until(lambda: not pid_alive(pid), 5)
+
+
+def avd_folder(avd: str) -> Path | None:
+    ini = android_avd_dir() / f"{avd}.ini"
+    folder = android_avd_dir() / f"{avd}.avd"
+    try:
+        for line in ini.read_text(encoding="utf-8").splitlines():
+            if line.startswith("path="):
+                folder = Path(line.split("=", 1)[1].strip())
+    except OSError:
+        return None
+    return folder if folder.is_dir() else None
+
+
+def delete_avd_clone(name: str) -> None:
+    """Remove a pool-made AVD clone. Refuses anything without the clone prefix, so a real AVD is never deleted."""
+    if not name.startswith(CLONE_PREFIX) or "/" in name:
+        return
+    directory = android_avd_dir()
+    (directory / f"{name}.ini").unlink(missing_ok=True)
+    shutil.rmtree(directory / f"{name}.avd", ignore_errors=True)
+
+
+def clone_avd(source: str, name: str) -> None:
+    """Copy `source` to a new AVD `name`: an APFS clone (copy-on-write, instant, no extra disk) where the volume
+    supports it, a plain copy otherwise. Lock files and the generated hardware-qemu.ini are left out."""
+    directory = android_avd_dir()
+    src = avd_folder(source)
+    if src is None:
+        raise OSError(f"AVD {source!r} has no folder on disk to copy")
+    dest = directory / f"{name}.avd"
+    delete_avd_clone(name)  # leftovers of a crashed run on the same port
+    copied = False
+    for flags in ("-cR", "-R"):
+        result = subprocess.run(["cp", flags, str(src), str(dest)], capture_output=True, text=True, timeout=900)
+        if result.returncode == 0:
+            copied = True
+            break
+        shutil.rmtree(dest, ignore_errors=True)
+        error = result.stderr.strip()
+    if not copied:
+        raise OSError(f"copy of {src} failed: {error}")
+    for entry in list(dest.iterdir()):
+        if entry.name.startswith("hardware-qemu.ini") or entry.name.endswith(".lock"):
+            if entry.is_dir():
+                shutil.rmtree(entry, ignore_errors=True)
+            else:
+                entry.unlink(missing_ok=True)
+    config_ini = dest / "config.ini"
+    if config_ini.is_file():
+        lines = []
+        for line in config_ini.read_text(encoding="utf-8").splitlines():
+            if line.startswith("AvdId="):
+                line = f"AvdId={name}"
+            elif line.startswith("avd.ini.displayname="):
+                line = f"avd.ini.displayname={name}"
+            lines.append(line)
+        config_ini.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    ini_lines = []
+    for line in (directory / f"{source}.ini").read_text(encoding="utf-8").splitlines():
+        if line.startswith("path="):
+            line = f"path={dest}"
+        elif line.startswith("path.rel="):
+            line = f"path.rel={line.split('=', 1)[1].rsplit('/', 1)[0]}/{name}.avd" if "/" in line else f"path.rel={name}.avd"
+        ini_lines.append(line)
+    (directory / f"{name}.ini").write_text("\n".join(ini_lines) + "\n", encoding="utf-8")  # last: a half-made clone is not an AVD
+
+
+def cleanup_android_lease(lease: dict[str, Any]) -> None:
+    stop_android_emulator(lease)
+    if lease.get("clone_of"):
+        delete_avd_clone(lease.get("avd", ""))
+
+
+def start_android_emulator(home: Path, acfg: dict[str, Any], avd: str, port: int) -> subprocess.Popen:
+    cmd = [
+        emulator_bin() or "emulator",
+        "-avd", avd,
+        "-read-only",
+        "-port", str(port),
+        "-no-audio",
+        "-no-boot-anim",
+        "-no-snapshot-save",
+        "-gpu", str(acfg["gpu"]),
+    ]
+    if acfg.get("headless", True):
+        cmd.append("-no-window")
+    # The emulator trusts ANDROID_SDK_ROOT over its own location; a stale one (a command-line-tools
+    # install without system images) makes it exit with "Broken AVD system path".
+    env = dict(os.environ)
+    binary = Path(cmd[0])
+    if binary.parent.name == "emulator":
+        env["ANDROID_SDK_ROOT"] = env["ANDROID_HOME"] = str(binary.parent.parent)
+    log_dir = home / "android-logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log = open(log_dir / f"emulator-{port}.log", "ab")
+    try:
+        return subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env, start_new_session=True)
+    finally:
+        log.close()
+
+
+def wait_android_boot(serial: str, proc: subprocess.Popen, timeout: int) -> tuple[bool, str]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        code = proc.poll()
+        if code is not None:
+            return False, f"emulator exited with code {code}"
+        out = adb_run(["-s", serial, "shell", "getprop", "sys.boot_completed"], timeout=10)
+        if out is not None and out.strip() == "1":
+            return True, ""
+        time.sleep(1)
+    return False, f"not booted after {timeout}s"
+
+
+def avd_identity(avd: str) -> str:
+    """The `.avd` folder an AVD name resolves to (`medium_phone.ini` may point at `pivo_qa.avd`): that folder is what gets locked."""
+    ini = android_avd_dir() / f"{avd}.ini"
+    try:
+        for line in ini.read_text(encoding="utf-8").splitlines():
+            if line.startswith("path="):
+                return os.path.realpath(line.split("=", 1)[1].strip())
+    except OSError:
+        pass
+    return avd
+
+
+def external_avd_identities(home: Path, listed: set[str]) -> dict[str, str]:
+    """AVDs held by emulators the pool did not start: {identity: serial}. An emulator started without
+    -read-only locks its AVD, and a second instance is refused unless every instance is read-only."""
+    ours = {l.get("udid") for _, l in android_leases(home)}
+    held: dict[str, str] = {}
+    for serial in sorted(listed - ours):
+        if serial_port(serial) is None:
+            continue
+        out = adb_run(["-s", serial, "emu", "avd", "name"], timeout=10)
+        name = (out or "").strip().splitlines()[0].strip() if (out or "").strip() else ""
+        if name:
+            held[avd_identity(name)] = serial
+    return held
+
+
+def cmd_acquire_android(args: argparse.Namespace, home: Path) -> int:
+    ensure_layout(home)
+    config = load_config(home)
+    acfg = android_config(config)
+    avds = list(acfg["avds"]) or discover_avds()
+    known = set(avds) | set(discover_avds())
+    if not avds:
+        print("No Android AVDs: create one in Android Studio, then run: sim-pool init --android", file=sys.stderr)
+        return EXIT_ERROR
+    if args.avd and args.avd not in known:
+        print(f"Unknown AVD {args.avd!r}. Known: {', '.join(sorted(known))}", file=sys.stderr)
+        return EXIT_ERROR
+    if not emulator_bin() or not adb_bin():
+        print("Android SDK tools not found: need `emulator` and `adb` (set ANDROID_HOME or SIM_POOL_EMULATOR / SIM_POOL_ADB)", file=sys.stderr)
+        return EXIT_ERROR
+
+    defaults = config["defaults"]
+    timeout = args.timeout if args.timeout is not None else int(defaults.get("timeout_seconds", DEFAULT_TIMEOUT))
+    ttl = args.ttl if args.ttl is not None else int(defaults.get("ttl_seconds", DEFAULT_TTL))
+    poll = int(defaults.get("poll_seconds", DEFAULT_POLL))
+    boot_timeout = int(acfg["boot_timeout"])
+    deadline = time.monotonic() + timeout
+    owner = args.owner or f"agent-{os.getpid()}"
+    if args.window:
+        acfg["headless"] = False
+
+    lease: dict[str, Any] | None = None
+    proc: subprocess.Popen | None = None
+    while lease is None:
+        if time.monotonic() >= deadline:
+            print("SIM_POOL_BUSY", file=sys.stderr)
+            return EXIT_BUSY
+        with pool_lock(home):
+            gc(home, config)
+            current = android_leases(home)
+            port = None
+            listed = adb_serials() or set()
+            if len(current) < int(acfg["max_concurrent"]):
+                port = pick_android_port(home, acfg, listed)
+            avd = ""
+            clone_of = ""
+            if port is not None:
+                held = external_avd_identities(home, listed)
+                usable = [a for a in avds if avd_identity(a) not in held]
+                if (args.avd and avd_identity(args.avd) in held) or not usable:
+                    names = args.avd or ", ".join(avds)
+                    holder = held.get(avd_identity(args.avd), "") if args.avd else ", ".join(sorted(set(held.values())))
+                    print(
+                        f"AVD_IN_USE {names}: held by {holder}, an emulator started outside the pool without -read-only. "
+                        "Close it, or pick another --avd.",
+                        file=sys.stderr,
+                    )
+                    return EXIT_ERROR
+                # One lease per AVD: a second emulator of the same AVD stays `offline` in adb.
+                leased = {avd_identity(l.get("avd", "")) for _, l in current}
+                wanted = [a for a in usable if not args.avd or a == args.avd]
+                free = [a for a in wanted if avd_identity(a) not in leased]
+                avd = free[0] if free else ""
+                # Every wanted AVD is leased: copy one (APFS clone) instead of waiting for it.
+                if not avd and wanted and acfg.get("clone_on_busy", True) and not args.no_clone:
+                    clone_of = wanted[0]
+                    avd = f"{CLONE_PREFIX}{clone_of}-{port}"
+            if port is not None and avd:
+                serial = f"emulator-{port}"
+                expires_iso = datetime.fromtimestamp(time.time() + ttl + boot_timeout, timezone.utc).replace(microsecond=0).isoformat()
+                lease = {
+                    "lease_id": str(uuid.uuid4()),
+                    "udid": serial,
+                    "platform": "android",
+                    "avd": avd,
+                    "clone_of": clone_of,
+                    "port": port,
+                    "emulator_pid": 0,
+                    "boot_timeout": boot_timeout,
+                    "owner": owner,
+                    "pid": resolve_holder_pid(args.holder_pid),
+                    "project": args.project or "",
+                    "worktree": args.worktree or "",
+                    "session": args.session or "",
+                    "purpose": args.purpose or "qa",
+                    "acquired_at": now_iso(),
+                    "expires_at": expires_iso,
+                    "ephemeral": True,
+                    "full": False,
+                }
+                # The lease exists before the clone and the boot, so no other acquire can pick this port or AVD.
+                write_lease(lease_path(home, serial), lease)
+        if lease is None:
+            time.sleep(poll)
+            continue
+        # Copying and starting happen outside the pool lock: a plain copy (no APFS) can take a while.
+        serial = lease["udid"]
+        failure = ""
+        if lease["clone_of"]:
+            try:
+                clone_avd(lease["clone_of"], lease["avd"])
+            except (OSError, subprocess.SubprocessError) as exc:
+                failure = f"AVD_CLONE_FAILED {lease['clone_of']}: {exc}"
+        if not failure:
+            try:
+                proc = start_android_emulator(home, acfg, lease["avd"], lease["port"])
+            except OSError as exc:
+                failure = f"ANDROID_START_FAILED {exc}"
+        if failure:
+            if lease["clone_of"]:
+                delete_avd_clone(lease["avd"])
+            with pool_lock(home):
+                remove_lease(lease_path(home, serial))
+            print(failure, file=sys.stderr)
+            return EXIT_ERROR
+        lease["emulator_pid"] = proc.pid
+        with pool_lock(home):
+            if read_lease(lease_path(home, serial)):
+                write_lease(lease_path(home, serial), lease)
+
+    assert proc is not None
+    serial = lease["udid"]
+    ok, reason = wait_android_boot(serial, proc, boot_timeout)
+    if not ok:
+        cleanup_android_lease(lease)
+        with pool_lock(home):
+            remove_lease(lease_path(home, serial))
+        print(f"ANDROID_BOOT_FAILED {serial} {reason}", file=sys.stderr)
+        return EXIT_ERROR
+    expires_iso = datetime.fromtimestamp(time.time() + ttl, timezone.utc).replace(microsecond=0).isoformat()
+    with pool_lock(home):
+        path = lease_path(home, serial)
+        if read_lease(path):
+            lease["expires_at"] = expires_iso
+            write_lease(path, lease)
+    print(f"LEASE_ID={lease['lease_id']}")
+    print(f"UDID={serial}")
+    print(f"SIMULATOR_NAME={lease['avd']}")
+    print(f"EXPIRES_AT={expires_iso}")
+    print("EPHEMERAL=true")
+    print("FULL=false")
+    print("PLATFORM=android")
+    if lease.get("clone_of"):
+        print(f"CLONE_OF={lease['clone_of']}")
+    return EXIT_OK
+
+
 def cmd_status(home: Path) -> int:
     config = load_config(home)
     gc(home, config)
-    devices = config.get("devices", [])
+    devices = leasable_udids(config)
     sim_info = simctl_devices()
     now = datetime.now(timezone.utc)
     print(f"pool_home={home}")
-    print(f"devices_whitelisted={len(devices)}")
+    print(f"templates={len(config.get('devices', []))} clones_only={clones_only_mode(config)}")
+    print(f"devices_ephemeral={len(config.get('ephemeral_devices', []))}")
+    print(f"devices_leasable={len(devices)}")
+    for udid in sorted(template_udids(config)):
+        name = sim_info.get(udid, {}).get("name", "unknown")
+        state = sim_info.get(udid, {}).get("state", "unknown")
+        print(f"TEMPLATE\t{udid}\t{name}\t{state}\t(not leased for QA)")
     for udid in devices:
         path = lease_path(home, udid)
         lease = read_lease(path)
         name = sim_info.get(udid, {}).get("name", "unknown")
         state = sim_info.get(udid, {}).get("state", "unknown")
+        kind = "ephemeral" if is_ephemeral_udid(config, udid) else "pool"
         if not lease:
-            print(f"FREE\t{udid}\t{name}\t{state}")
+            marker = "MISSING" if is_ghost_ephemeral(config, udid, sim_info) else "FREE"
+            print(f"{marker}\t{udid}\t{name}\t{state}\t{kind}")
             continue
         drop, reason = should_drop_lease(lease, config, now)
         if drop:
@@ -356,13 +1173,29 @@ def cmd_status(home: Path) -> int:
         expires = lease.get("expires_at", "")
         lease_id = lease.get("lease_id", "")
         print(
-            f"LEASED\t{udid}\t{name}\t{state}\t"
+            f"LEASED\t{udid}\t{name}\t{state}\t{kind}\t"
             f"lease_id={lease_id}\towner={owner}\tproject={project}\tpid={pid}\texpires_at={expires}"
         )
+    android_rows = android_leases(home)
+    if config.get("android") or android_rows:
+        acfg = android_config(config)
+        print(f"android_avds={','.join(acfg['avds']) or '(none)'} android_leased={len(android_rows)}/{acfg['max_concurrent']}")
+        for _path, lease in android_rows:
+            drop, reason = should_drop_lease(lease, config, now, android_serials=adb_serials())
+            if drop:
+                print(f"STALE\t{lease.get('udid')}\t{lease.get('avd')}\tandroid\treason={reason}")
+                continue
+            print(
+                f"LEASED\t{lease.get('udid')}\t{lease.get('avd')}\tandroid\t{lease.get('state', 'emulator')}\t"
+                f"lease_id={lease.get('lease_id')}\towner={lease.get('owner')}\tproject={lease.get('project')}\t"
+                f"pid={lease.get('pid')}\texpires_at={lease.get('expires_at')}"
+            )
     return EXIT_OK
 
 
 def cmd_acquire(args: argparse.Namespace, home: Path) -> int:
+    if getattr(args, "platform", "ios") == "android":
+        return cmd_acquire_android(args, home)
     config = load_config(home)
     if not config.get("devices"):
         init_config(home)
@@ -375,40 +1208,27 @@ def cmd_acquire(args: argparse.Namespace, home: Path) -> int:
     deadline = time.monotonic() + timeout
     owner = args.owner or f"agent-{os.getpid()}"
     while True:
-        with pool_lock(home):
-            gc(home, config)
-            udid = pick_free_udid(home, config, args.prefer_udid, prefer)
-            if udid:
-                lease_id = str(uuid.uuid4())
-                acquired_at = now_iso()
-                expires_at = (
-                    datetime.now(timezone.utc).timestamp() + ttl
-                )
-                expires_iso = datetime.fromtimestamp(expires_at, timezone.utc).replace(microsecond=0).isoformat()
-                sim_info = simctl_devices()
-                name = sim_info.get(udid, {}).get("name", "unknown")
-                lease = {
-                    "lease_id": lease_id,
-                    "udid": udid,
-                    "owner": owner,
-                    "pid": resolve_holder_pid(args.holder_pid),
-                    "project": args.project or "",
-                    "worktree": args.worktree or "",
-                    "session": args.session or "",
-                    "purpose": args.purpose or "qa",
-                    "acquired_at": acquired_at,
-                    "expires_at": expires_iso,
-                }
-                write_lease(lease_path(home, udid), lease)
-                print(f"LEASE_ID={lease_id}")
-                print(f"UDID={udid}")
-                print(f"SIMULATOR_NAME={name}")
-                print(f"EXPIRES_AT={expires_iso}")
-                return EXIT_OK
         if time.monotonic() >= deadline:
             print("SIM_POOL_BUSY", file=sys.stderr)
             return EXIT_BUSY
-        time.sleep(poll)
+        with pool_lock(home):
+            gc(home, config)
+            config = load_config(home)
+            udid = pick_free_udid(home, config, args.prefer_udid, prefer)
+            if udid:
+                return grant_lease(home, config, udid, owner, args, ttl)
+            try_ephemeral = should_provision_clone(args, home, config)
+        if try_ephemeral:
+            new_udid = provision_ephemeral_simulator(home, load_config(home))
+            if new_udid:
+                # Lease our own clone atomically: waiting for the shared pick queue lets
+                # other acquirers snipe it during the poll sleep, causing endless re-cloning.
+                with pool_lock(home):
+                    config = load_config(home)
+                    if not read_lease(lease_path(home, new_udid)):
+                        return grant_lease(home, config, new_udid, owner, args, ttl)
+        else:
+            time.sleep(poll)
 
 
 def cmd_renew(args: argparse.Namespace, home: Path) -> int:
@@ -437,21 +1257,29 @@ def cmd_renew(args: argparse.Namespace, home: Path) -> int:
 
 def cmd_release(args: argparse.Namespace, home: Path) -> int:
     with pool_lock(home):
+        config = load_config(home)
+        lease: dict[str, Any] | None = None
+        path: Path | None = None
         if args.lease:
             path, lease = find_lease_by_id(home, args.lease)
-            if path and lease:
-                remove_lease(path)
         elif args.udid:
-            remove_lease(lease_path(home, args.udid))
+            path = lease_path(home, args.udid)
+            lease = read_lease(path)
         else:
             print("release requires --lease or --udid", file=sys.stderr)
             return EXIT_ERROR
+        if path and lease:
+            cleanup_ephemeral_lease(home, config, lease)
+            remove_lease(path)
     return EXIT_OK
 
 
 def cmd_force_release(args: argparse.Namespace, home: Path) -> int:
     with pool_lock(home):
         path = lease_path(home, args.udid)
+        lease = read_lease(path)
+        if lease and is_android_lease(lease):
+            cleanup_android_lease(lease)
         if remove_lease(path):
             reason = args.reason or "force-release"
             print(f"FORCE_RELEASED udid={args.udid} reason={reason}")
@@ -516,6 +1344,15 @@ def cmd_doctor(home: Path) -> int:
             print(f"    lease: {lease.get('lease_id')} owner={lease.get('owner')} expires={lease.get('expires_at')}")
         if claim and not lease:
             print(f"    warn: agent-device claim session={claim} but no sim-pool lease")
+    acfg = android_config(config)
+    if config.get("android") or discover_avds():
+        print("")
+        print("=== android ===")
+        print(f"adb: {adb_bin() or 'NOT FOUND'}")
+        print(f"emulator: {emulator_bin() or 'NOT FOUND'}")
+        print(f"avds (config): {', '.join(acfg['avds']) or '(none: run sim-pool init --android)'}")
+        print(f"avds (on disk): {', '.join(discover_avds()) or '(none)'}")
+        print(f"ports: {acfg['base_port']}-{acfg['max_port']} max_concurrent={acfg['max_concurrent']} headless={acfg['headless']}")
     print("")
     print("Agent recipe:")
     print("  sim-pool acquire --holder-pid $$ --owner <unique> --project <repo> --worktree \"$PWD\" --session <name>")
@@ -526,7 +1363,31 @@ def cmd_doctor(home: Path) -> int:
     print("  sim-pool release --lease <id>")
     print("")
     print("Orphan recovery: TTL + dead-pid GC; release is polite not required.")
-    print("On SIM_POOL_BUSY (exit 2): report inconclusive; do not create simulators.")
+    ephem = config.get("ephemeral", {})
+    if ephem.get("clones_only", True):
+        print("clones_only: templates are never leased — every acquire uses or creates a simslim clone.")
+    if ephem.get("enabled", True):
+        if config.get("ephemeral", {}).get("delete_on_release", False):
+            print("Ephemeral: simslim clone from template; delete on release/TTL GC.")
+        else:
+            print("Ephemeral: simslim clone from template; clones kept until you delete manually (delete_on_release=false).")
+        print(f"  clone_udid={ephem.get('clone_udid') or '(first template iPhone)'}")
+    else:
+        print("On SIM_POOL_BUSY (exit 2): report inconclusive (ephemeral disabled).")
+    return EXIT_OK
+
+
+def cmd_init_android(home: Path, force: bool) -> int:
+    ensure_layout(home)
+    config = load_config(home)
+    android = dict(config.get("android") or {})
+    if force or not android.get("avds"):
+        android["avds"] = discover_avds()
+    config["android"] = android
+    save_config(home, config)
+    print(f"INIT_ANDROID pool_home={home} avds={len(android['avds'])}")
+    for avd in android["avds"]:
+        print(f"  {avd}")
     return EXIT_OK
 
 
@@ -559,6 +1420,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_init = sub.add_parser("init", help="Discover iPhone sims into whitelist (no create)")
     p_init.add_argument("--force", action="store_true")
+    p_init.add_argument("--android", action="store_true", help="Discover Android AVDs into config.android.avds (iOS devices untouched)")
 
     p_acquire = sub.add_parser("acquire", help="Block until a simulator lease is granted")
     p_acquire.add_argument("--owner", default="")
@@ -567,9 +1429,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_acquire.add_argument("--purpose", default="qa")
     p_acquire.add_argument("--session", default="")
     p_acquire.add_argument("--prefer-udid", default="")
+    p_acquire.add_argument("--platform", choices=["ios", "android"], default="ios")
+    p_acquire.add_argument("--avd", default="", help="Android: AVD to boot (default: the least-used configured AVD)")
+    p_acquire.add_argument("--no-clone", action="store_true", help="Android: wait for a busy AVD instead of cloning it")
+    p_acquire.add_argument("--window", action="store_true", help="Android: show the emulator window (default headless)")
     p_acquire.add_argument("--timeout", type=int, default=None)
     p_acquire.add_argument("--ttl", type=int, default=None)
     p_acquire.add_argument("--holder-pid", type=int, default=None)
+    p_acquire.add_argument(
+        "--no-ephemeral",
+        action="store_true",
+        help="Do not simslim-clone when the pool is busy",
+    )
 
     p_renew = sub.add_parser("renew", help="Extend lease TTL")
     p_renew.add_argument("--lease", required=True)
@@ -604,6 +1475,8 @@ def main() -> int:
     if args.command == "doctor":
         return cmd_doctor(home)
     if args.command == "init":
+        if args.android:
+            return cmd_init_android(home, force=args.force)
         return cmd_init(home, force=args.force)
     if args.command == "acquire":
         return cmd_acquire(args, home)

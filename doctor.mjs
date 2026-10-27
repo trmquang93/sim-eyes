@@ -2,12 +2,13 @@
 // It changes nothing, and it never runs python3 before the Command Line Tools are known to be there (on a bare Mac
 // /usr/bin/python3 opens an installer dialog).
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { adCommandFromHost } from "./ad-command.mjs";
 import { ocrForDoctor } from "./ocr.mjs";
 import { resolveSimPool } from "./pool.mjs";
+import { findAndroidTools, listAvds } from "./platform.mjs";
 
 const MIN_NODE = [22, 12];
 const result = (id, status, detail, fix = "") => ({ id, status, detail, fix });
@@ -19,7 +20,7 @@ const fail = (id, detail, fix) => result(id, "fail", detail, fix);
  * Every check, in order. `exec(cmd, args)` resolves `{ code, stdout, stderr }` and never rejects; the rest is what the
  * checks look at, passed in so each branch can be made to fail.
  */
-export async function runDoctor({ platform, nodeVersion, env, exec, pool, poolConfigExists, adCommand, adPin, ocr }) {
+export async function runDoctor({ platform, nodeVersion, env, exec, pool, poolConfigExists, android, adCommand, adPin, ocr }) {
   const results = [];
 
   results.push(
@@ -67,6 +68,19 @@ export async function runDoctor({ platform, nodeVersion, env, exec, pool, poolCo
       : warn("real-device", `${phones} connected, but the runner signing env is not set`, "Set AGENT_DEVICE_IOS_TEAM_ID and AGENT_DEVICE_IOS_BUNDLE_ID in the MCP server's env (README: Real device).")
   );
 
+  // Android is opt-in (acquire platform:"android"): a Mac without it is normal, so every Android check is a warning.
+  const missing = [!android.adb && "adb", !android.emulator && "emulator"].filter(Boolean);
+  results.push(
+    missing.length === 0
+      ? ok("android-sdk", `adb and emulator found (${android.emulator})`)
+      : warn("android-sdk", `${missing.join(" and ")} not found (only needed for acquire platform:"android")`, "Install Android Studio (it brings the SDK and emulator) or the command-line tools, or set ANDROID_HOME.")
+  );
+  results.push(
+    android.avds.length > 0
+      ? ok("android-avd", `${android.avds.length} AVD${android.avds.length === 1 ? "" : "s"}: ${android.avds.join(", ")}`)
+      : warn("android-avd", "no AVD (Android virtual device) found", "In Android Studio open Device Manager and create one, or run: avdmanager create avd")
+  );
+
   if (!cltOk) {
     results.push(fail("python3", "not checked: needs the Xcode command line tools first", "Install the command line tools (see xcode-clt)."));
   } else {
@@ -86,11 +100,24 @@ export async function runDoctor({ platform, nodeVersion, env, exec, pool, poolCo
     results.push(warn("sim-pool", `${pool.source} copy; the simulator whitelist is created on the first acquire`, ""));
   } else {
     const status = await exec(pool.command, [...pool.args, "status"]);
-    const devices = status.stdout.match(/devices_whitelisted=(\d+)/)?.[1];
+    // `devices_whitelisted=N` is the original sim-pool status; `templates=N` is the same count after the clones-only change.
+    const devices = status.stdout.match(/devices_whitelisted=(\d+)/)?.[1] ?? status.stdout.match(/\btemplates=(\d+)/)?.[1];
     results.push(
       status.code === 0 && devices !== undefined
         ? ok("sim-pool", `${pool.source} copy; ${devices} simulator${devices === "1" ? "" : "s"} whitelisted`)
         : fail("sim-pool", `${pool.path}: status failed: ${(status.stderr || status.stdout).trim().split("\n")[0]}`, "Run the pool's status command by hand to see the error.")
+    );
+  }
+
+  // The user's own sim-pool skill wins over the vendored copy; one from before Android rejects --platform.
+  if (!pool || !cltOk) {
+    results.push(warn("android-pool", pool ? "not checked: needs the command line tools first" : "not checked: no sim-pool", ""));
+  } else {
+    const help = await exec(pool.command, [...pool.args, "acquire", "--help"]);
+    results.push(
+      help.code === 0 && help.stdout.includes("--platform")
+        ? ok("android-pool", `${pool.source} copy supports Android`)
+        : warn("android-pool", `${pool.source} copy has no Android support (acquire has no --platform)`, "Update the sim-pool skill, or remove it so the copy that ships with sim-eyes is used, or set SIM_POOL_BIN.")
     );
   }
 
@@ -166,6 +193,10 @@ export async function doctorMain(argv = []) {
     exec,
     pool: resolveSimPool(),
     poolConfigExists: existsSync(join(poolHome, "config.json")),
+    android: {
+      ...findAndroidTools({ env: process.env, home: homedir(), exists: existsSync }),
+      avds: listAvds({ env: process.env, home: homedir(), readdir: (d) => { try { return readdirSync(d); } catch { return null; } } }),
+    },
     adCommand: adCommandFromHost(() => ["npx", "-y", "agent-device"]),
     adPin: pkg.simEyes.agentDevice,
     ocr: ocrForDoctor(),

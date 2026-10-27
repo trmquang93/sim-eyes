@@ -1,6 +1,6 @@
 # sim-eyes
 
-An MCP server that lets an agent look at and drive one iOS simulator, plus **Studio**, a Mac app where testers write test cases as plain sentences and run them on a simulator. Every step reports the screen it left behind in text.
+An MCP server that lets an agent look at and drive one iOS simulator (or, optionally, one Android emulator), plus **Studio**, a Mac app where testers write test cases as plain sentences and run them on a simulator. Every step reports the screen it left behind in text.
 
 | Part | What it is |
 | --- | --- |
@@ -43,6 +43,7 @@ npx -y sim-eyes doctor
 | Xcode and an iPhone simulator | everything | `doctor` says so; install Xcode, open it once, add a simulator in *Window > Devices and Simulators* |
 | `TYPESAFE_API_KEY` in the MCP `env` | the `goal` step only; every other step runs without it | `goal` returns an error that names the variable. With an invite token from a hub, set the token as `TYPESAFE_API_KEY` and add `TYPESAFE_BASE_URL` (`https://<hub>/typesafe`) |
 | `ffmpeg` (`brew install ffmpeg`) | `record` stop only | a warning in `doctor` |
+| Android SDK (`adb`, `emulator`) and one AVD | `acquire` with `platform:"android"` only | warnings in `doctor`; install Android Studio and create an AVD in *Device Manager* (see [Android emulator](#android-emulator)) |
 
 The first start downloads the package and its dependencies (about 5 s on a fast connection). If your client's start-up timeout is shorter, install once with `npm i -g sim-eyes` and use `"command": "sim-eyes"` with no args.
 
@@ -66,7 +67,7 @@ Unit tests use `scripts/run-unit-tests.sh` (separate lease), not the UI chat's `
 
 | Tool | Purpose |
 | --- | --- |
-| `acquire` | Lease an exclusive UDID. **`app` is required** (display name or bundle id): the session attaches to that app without relaunching it. Optional `prefer_udid` / `prefer_device`: sim-pool treats them as hints, so when it hands out a different simulator the call **fails** (and releases that lease) with the pool row that explains why. Also closes agent-device sessions left by dead sim-eyes processes. |
+| `acquire` | Lease an exclusive UDID. **`app` is required** (display name or bundle id): the session attaches to that app without relaunching it. Optional `platform` (`ios` default, or `android`). Optional `prefer_udid` / `prefer_device` (an AVD name on Android): sim-pool treats them as hints, so when it hands out a different simulator the call **fails** (and releases that lease) with the pool row that explains why. Also closes agent-device sessions left by dead sim-eyes processes. |
 | `release` | Free the lease + close the session when QA ends |
 | `status` | This process binding + host pool table |
 | `batch` | Runs steps (`tap`, `goal`, `scroll`, `open`, ...); auto-acquires on first use if you forgot `acquire` |
@@ -156,6 +157,18 @@ Setup, once:
 - With several devices connected pass `prefer_udid` (or `prefer_device`); sim-eyes never guesses between phones.
 
 Limits: `record` works on a phone (the clip is written inside agent-device's runner app and copied out on stop; verified with taps, swipes and back), `open reset:true` is refused (no simctl on hardware); Studio stays simulator-only; screenshots are shrunk to points like on a simulator; a tap waits a fixed 1.2 s because `--settle` is unreliable on a phone; Photos pickers and permission sheets outside the app's tree are unproven on hardware. The agent drives your real phone and its real data: use a test device.
+
+## Android emulator
+
+`acquire` with `platform:"android"` leases an Android emulator through the same sim-pool and drives it with the same steps. iOS stays the default: a caller that passes no `platform` gets exactly what it got before.
+
+Setup, once: install Android Studio (or the command-line tools) and create one or more AVDs in Device Manager. `sim-eyes doctor` checks `adb`, `emulator`, the AVDs, and that the sim-pool in use understands Android. If you have your own sim-pool skill from before Android support, update it or remove it so the copy in the package is used; doctor says so.
+
+- **Leasing.** sim-pool starts the emulator headless and read-only (`-read-only`, state is discarded on exit) on a free console port, waits for boot (up to 180 s; the first acquire takes about 10-60 s), and stops it on `release`, TTL expiry or a dead holder. `prefer_device` is an **AVD name** (not a UDID); without it the pool picks a free AVD. A running Android Studio emulator is never leased, and an AVD it holds open is refused (`AVD_IN_USE`).
+- **Parallel agents.** One AVD runs one emulator at a time (a second instance of the same AVD stays `offline` in adb). When the AVD you ask for is leased, sim-pool copies it (an APFS clone, instant and almost no disk) into `simpool-<avd>-<port>`, boots that, and deletes it on release. Opt out with `--no-clone` or `"clone_on_busy": false` under `android` in `~/.agent-sim-pool/config.json`.
+- **App ids.** `app` is the package name (`com.example.app`), and `open reset:true` clears its data (`adb shell pm clear`).
+- **Screen reports.** Coordinates are in points (1 point = 1 dp), as on iOS. A list row is one control labelled by its title, with its summary shown as `value`. An open AlertDialog reads as `alert "dialog with Cancel / Save"`. `back` presses the system Back key.
+- **Limits.** Emulators only (no physical Android phone). The accessibility tree has no screen title, so a report shows the visible texts instead. The on-screen keyboard is not in the tree, but `type` with `submit` and `key dismiss` work. Untested on Android: `double_tap`, `pinch`, `drag`, `long_press`, `tap_grid`, `record`, a runtime permission dialog, and the OCR-text fallback. Studio is iOS-only.
 
 ## Studio (plain-text tests for testers)
 

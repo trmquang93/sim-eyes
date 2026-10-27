@@ -22,6 +22,7 @@ function mac(over = {}) {
     "xcrun simctl list devices available -j": { code: 0, stdout: SIMCTL, stderr: "" },
     "python3 --version": { code: 0, stdout: "Python 3.9.6\n", stderr: "" },
     "python3 /pool/sim-pool status": { code: 0, stdout: POOL_STATUS, stderr: "" },
+    "python3 /pool/sim-pool acquire --help": { code: 0, stdout: "usage: sim-pool acquire [--platform {ios,android}] [--avd AVD]\n", stderr: "" },
     "node /ad/agent-device.mjs --version": { code: 0, stdout: "0.21.19\n", stderr: "" },
     "ffmpeg -version": { code: 0, stdout: "ffmpeg version 7\n", stderr: "" },
     ...over.answers,
@@ -37,6 +38,7 @@ function mac(over = {}) {
     },
     pool: { command: "python3", args: ["/pool/sim-pool"], source: "vendored", path: "/pool/sim-pool" },
     poolConfigExists: true,
+    android: { adb: "/sdk/platform-tools/adb", emulator: "/sdk/emulator/emulator", avds: ["Pixel_8", "s4_qa"] },
     adCommand: ["node", "/ad/agent-device.mjs"],
     adPin: "0.21.19",
     ocr: { trusted: () => true, run: async () => ({ code: 0, stdout: "{}", stderr: "" }), compiled: () => false },
@@ -51,8 +53,8 @@ const status = (results, id) => results.find((r) => r.id === id);
   const { deps } = mac();
   const results = await runDoctor(deps);
   assert.deepEqual(results.map((r) => [r.id, r.status]), [
-    ["macos", "pass"], ["node", "pass"], ["xcode-clt", "pass"], ["simulator", "pass"], ["real-device", "warn"], ["python3", "pass"],
-    ["sim-pool", "pass"], ["agent-device", "pass"], ["ocr", "pass"], ["ffmpeg", "pass"], ["typesafe", "pass"],
+    ["macos", "pass"], ["node", "pass"], ["xcode-clt", "pass"], ["simulator", "pass"], ["real-device", "warn"], ["android-sdk", "pass"], ["android-avd", "pass"], ["python3", "pass"],
+    ["sim-pool", "pass"], ["android-pool", "pass"], ["agent-device", "pass"], ["ocr", "pass"], ["ffmpeg", "pass"], ["typesafe", "pass"],
   ]);
   assert.equal(doctorExitCode(results), 0);
   assert.ok(!formatDoctor(results).includes("sk-secret-value"), "the key is never printed");
@@ -97,6 +99,13 @@ assert.equal(status(await runDoctor(mac({ answers: { "python3 --version": { code
 }
 assert.equal(status(await runDoctor(mac({ answers: { "python3 /pool/sim-pool status": { code: 1, stdout: "", stderr: "boom" } } }).deps), "sim-pool").status, "fail");
 assert.match(status(await runDoctor(mac().deps), "sim-pool").detail, /2 simulator/, "reports the whitelist size");
+// Why: the sim-pool skill since the clones-only change prints `templates=N` instead of `devices_whitelisted=N`; doctor failed a healthy pool.
+{
+  const newer = mac({ answers: { "python3 /pool/sim-pool status": { code: 0, stdout: "pool_home=/x\ntemplates=3 clones_only=True\ndevices_ephemeral=0\ndevices_leasable=0\n", stderr: "" } } });
+  const r = status(await runDoctor(newer.deps), "sim-pool");
+  assert.equal(r.status, "pass");
+  assert.match(r.detail, /3 simulators/);
+}
 
 {
   const r = status(await runDoctor(mac({ answers: { "node /ad/agent-device.mjs --version": { code: 0, stdout: "0.20.0\n", stderr: "" } } }).deps), "agent-device");
@@ -146,6 +155,43 @@ assert.equal(status(await runDoctor(mac({ answers: { "node /ad/agent-device.mjs 
   const ready = status(await runDoctor(signed.deps), "real-device");
   assert.equal(ready.status, "pass");
   assert.match(ready.detail, /^1 connected/, "simulators listed by devicectl are not phones");
+}
+
+// Android is opt-in: an iOS-only Mac must never fail doctor for lacking it. Each missing piece is a warning that says what to install.
+{
+  const none = await runDoctor(mac({ deps: { android: { adb: null, emulator: null, avds: [] } } }).deps);
+  assert.equal(status(none, "android-sdk").status, "warn");
+  assert.match(status(none, "android-sdk").detail, /adb.*emulator|emulator.*adb/);
+  assert.match(status(none, "android-sdk").fix, /Android Studio/);
+  assert.equal(status(none, "android-avd").status, "warn");
+  assert.match(status(none, "android-avd").fix, /Device Manager|AVD/);
+  assert.equal(doctorExitCode(none), 0, "no Android at all still exits 0");
+
+  const half = await runDoctor(mac({ deps: { android: { adb: "/sdk/platform-tools/adb", emulator: null, avds: ["a"] } } }).deps);
+  assert.equal(status(half, "android-sdk").status, "warn");
+  assert.match(status(half, "android-sdk").detail, /emulator not found/, "it names the missing tool");
+  assert.ok(!/adb not found/.test(status(half, "android-sdk").detail));
+
+  const ok = await runDoctor(mac().deps);
+  assert.match(status(ok, "android-avd").detail, /2 AVDs: Pixel_8, s4_qa/);
+  assert.match(status(await runDoctor(mac({ deps: { android: { adb: "/a", emulator: "/e", avds: ["one"] } } }).deps), "android-avd").detail, /^1 AVD: one/);
+}
+
+// Why: the user's own sim-pool skill wins over the vendored copy. One that predates Android rejects --platform, and the
+// agent would see an argparse error; doctor says the real cause.
+{
+  const old = mac({ answers: { "python3 /pool/sim-pool acquire --help": { code: 0, stdout: "usage: sim-pool acquire [--prefer-udid UDID]\n", stderr: "" } } });
+  const r = status(await runDoctor(old.deps), "android-pool");
+  assert.equal(r.status, "warn");
+  assert.match(r.detail, /no Android support/);
+  assert.match(r.fix, /update the sim-pool skill|vendored/i);
+
+  const noClt = mac({ answers: { "xcode-select -p": { code: 2, stdout: "", stderr: "x" } } });
+  const r2 = status(await runDoctor(noClt.deps), "android-pool");
+  assert.equal(r2.status, "warn");
+  assert.ok(!noClt.calls.includes("python3 /pool/sim-pool acquire --help"), "the pool is a Python script: not run without the Command Line Tools");
+
+  assert.equal(status(await runDoctor(mac({ deps: { pool: null } }).deps), "android-pool").status, "warn");
 }
 
 console.log("test-doctor: ok");

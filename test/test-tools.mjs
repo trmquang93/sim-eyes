@@ -76,6 +76,12 @@ try {
   // A phone is chosen only by asking for it; the default stays a simulator so an agent cannot land on hardware by accident.
   assert.deepEqual(acquire.inputSchema.properties.target.enum, ["simulator", "device"]);
   assert.match(acquire.description, /physical iPhone/);
+  // Android is chosen only by asking for it, so every existing caller keeps getting an iOS simulator.
+  assert.deepEqual(acquire.inputSchema.properties.platform.enum, ["ios", "android"]);
+  assert.match(acquire.inputSchema.properties.platform.description, /default/i);
+  assert.ok(!acquire.inputSchema.required.includes("platform"), "platform stays optional");
+  assert.match(acquire.description, /Android emulator/);
+  assert.match(init.result.instructions, /Android emulator/);
 
   const statusTool = tools.find((t) => t.name === "status");
   assert.deepEqual(statusTool.inputSchema.required, ["session_id"]);

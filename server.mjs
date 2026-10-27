@@ -54,7 +54,9 @@ import {
 } from "./pool.mjs";
 import { adCommandFromHost } from "./ad-command.mjs";
 import { retryDaemonStartup } from "./ad-daemon.mjs";
-import { preferDiffersFromBinding, preferHonored, SESSION_ID_RULE, targetDiffersFromBinding } from "./binding-prefer.mjs";
+import { platformDiffersFromBinding, preferDiffersFromBinding, preferHonored, SESSION_ID_RULE, targetDiffersFromBinding } from "./binding-prefer.mjs";
+import { normalizeAndroidNodes } from "./android-tree.mjs";
+import { adTargetArgs, androidResetArgs, normalizePlatform, parseWmDensity, scaleAdArgs, screenshotArgs } from "./platform.mjs";
 import {
   SessionRegistry,
   formatSessionPrefix,
@@ -166,7 +168,7 @@ async function sweepStaleSessions() {
   }
 }
 
-async function acquireBinding({ preferUdid, preferDevice, target } = {}) {
+async function acquireBinding({ preferUdid, preferDevice, target, platform } = {}) {
   if (ctx.binding) {
     if (ctx.binding.leaseId) await renewLease(ctx.binding.leaseId).catch(() => {});
     return ctx.binding;
@@ -175,8 +177,24 @@ async function acquireBinding({ preferUdid, preferDevice, target } = {}) {
 
   const prefer = preferUdid || undefined;
   const preferName = preferDevice || undefined;
+  const os = normalizePlatform(platform);
 
-  if (target === "device") {
+  if (os === "android") {
+    if (target === "device") throw new Error("platform:\"android\" drives emulators only; a physical Android phone is not supported.");
+    if (!usePool()) throw new Error("Android emulators are leased through sim-pool, which is unavailable here (SIM_EYES_USE_POOL=0 or no sim-pool found).");
+    ctx.binding = await acquireLease({
+      platform: "android",
+      instanceId: `${INSTANCE_ID}-${ctx.id}`,
+      preferUdid: prefer,
+      preferDevice: preferName,
+      project: process.env.SIM_EYES_PROJECT || "sim-eyes",
+      worktree: process.env.SIM_EYES_WORKTREE || process.cwd(),
+      ttl: process.env.SIM_EYES_LEASE_TTL ? Number(process.env.SIM_EYES_LEASE_TTL) : undefined,
+    });
+    await requirePreferred(undefined, preferName);
+    // One point is one dp: sim-eyes works in points, agent-device taps in pixels (see scaleAdArgs).
+    ctx.binding.scale = parseWmDensity(await execCmd(adbBin(), ["-s", ctx.binding.udid, "shell", "wm", "density"])) / 160;
+  } else if (target === "device") {
     ctx.binding = await acquireDeviceBinding({ udid: prefer, name: preferName });
   } else if (usePool()) {
     let udid = prefer;
@@ -314,9 +332,7 @@ async function releaseBinding({ closeSession = true } = {}) {
           "close",
           "--session",
           current.session,
-          "--platform",
-          "ios",
-          ...deviceSelectArgs(current.udid),
+          ...adTargetArgs(current.platform, current.udid),
         ],
         { timeoutMs: 60000 }
       ).catch(() => {});
@@ -330,20 +346,13 @@ async function releaseBinding({ closeSession = true } = {}) {
 
 const isUdid = isAnyUdid;
 
-/** agent-device: `--udid` for UUIDs, `--device` for display names. */
-function deviceSelectArgs(udidOrName) {
-  return isUdid(udidOrName)
-    ? ["--udid", udidOrName]
-    : ["--device", udidOrName];
-}
-
 /** Commands that cannot change what is on screen; everything else invalidates the cached snapshot and screenshot. */
 const READ_ONLY_AD = new Set(["snapshot", "screenshot"]);
 
 async function runAd(args, opts) {
   const b = await ensureBound();
   if (!READ_ONLY_AD.has(args[0])) ctx.version += 1;
-  const argv = [...args, "--session", b.session, "--platform", "ios", ...deviceSelectArgs(b.udid)];
+  const argv = [...scaleAdArgs(args, b.scale), "--session", b.session, ...adTargetArgs(b.platform, b.udid)];
   try {
     return await spawnAd(argv, opts);
   } catch (err) {
@@ -380,8 +389,12 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function takeSnapshot() {
   const data = await runAdJson(["snapshot", "-i"]);
-  const nodes = data.data?.nodes ?? [];
-  if (nodes[0]?.rect) {
+  const android = ctx.binding?.platform === "android";
+  const nodes = android ? normalizeAndroidNodes(data.data?.nodes ?? [], { scale: ctx.binding.scale }) : (data.data?.nodes ?? []);
+  if (android) {
+    // The tree's first node is a scroll view, not the screen: the screen is the size of a screenshot (already in points).
+    if (!ctx.screenSize) ctx.screenSize = pngSize(await readFile((await currentShot("size")).path));
+  } else if (nodes[0]?.rect) {
     ctx.screenSize = {
       width: nodes[0].rect.width,
       height: nodes[0].rect.height,
@@ -434,9 +447,18 @@ async function currentShot(tag = "screen") {
   const path = join(dir, `${tag}-${Date.now()}.png`);
   // agent-device rejects --pixel-density on a device; its screenshots are Retina (3x), so shrink them to points.
   if (ctx.binding?.kind === "device") await deviceShot(path);
-  else await runAd(["screenshot", path, "--pixel-density", "1"]);
+  else if (ctx.binding?.platform === "android") await androidShot(path);
+  else await runAd(screenshotArgs(ctx.binding?.platform, path));
   ctx.shot = { path, version: ctx.version };
   return ctx.shot;
+}
+
+/** An Android screenshot is in pixels; shrink it to points so the image, the tree and the OCR share one unit (as on iOS). */
+async function androidShot(path) {
+  await runAd(screenshotArgs("android", path));
+  const png = pngSize(await readFile(path));
+  const scale = ctx.binding.scale;
+  await execCmd("sips", ["-z", String(Math.round(png.height / scale)), String(Math.round(png.width / scale)), path, "--out", path]);
 }
 
 async function deviceShot(path) {
@@ -646,6 +668,12 @@ function execCmd(cmd, args, timeoutMs = 60000) {
   });
 }
 
+/** adb for the Android SDK: PATH first, then the SDK folders sim-pool also looks in. */
+function adbBin() {
+  const roots = [process.env.ANDROID_HOME, process.env.ANDROID_SDK_ROOT, join(homedir(), "Library/Android/sdk")].filter(Boolean);
+  return roots.map((r) => join(r, "platform-tools", "adb")).find((p) => existsSync(p)) ?? "adb";
+}
+
 /** Reinstall the app from a copy of its own bundle, which empties its data container and preferences. */
 async function resetApp(bundleId) {
   await ensureBound();
@@ -653,6 +681,12 @@ async function resetApp(bundleId) {
     throw new Error(
       "open reset:true needs simctl and a simulator. On a real device uninstall and reinstall the app yourself, or use a goal step."
     );
+  }
+  if (ctx.binding?.platform === "android") {
+    // The emulator keeps the installed APK; pm clear empties its data and permissions, the Android form of a fresh install.
+    await execCmd(adbBin(), androidResetArgs(ctx.binding.udid, bundleId));
+    ctx.version += 1;
+    return;
   }
   const udid = ctx.binding?.udid;
   if (!/^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/.test(bundleId) || !isUdid(udid ?? "")) {
@@ -939,8 +973,12 @@ async function tapStep(args) {
   });
 }
 
-/** The `back` step: the navigation Back control. */
+/** The `back` step: the navigation Back control (iOS), or the system Back key (Android has no Back control on screen). */
 async function backStep() {
+  if (ctx.binding?.platform === "android") {
+    await ensureApp();
+    return measuredGesture("back", "pressed the system Back key", () => runAd(["back"]));
+  }
   const { targets } = await tappable();
   const backs = backTargets(targets);
   if (backs.length !== 1) {
@@ -1056,6 +1094,7 @@ function statusText() {
       `bound: yes`,
       `agent_device_session: ${ctx.binding.session}`,
       `kind: ${ctx.binding.kind ?? "simulator"}`,
+      ...(ctx.binding.platform === "android" ? ["platform: android"] : []),
       `udid: ${ctx.binding.udid}`,
       `name: ${ctx.binding.name}`,
       ...(ctx.binding.lockPath ? [`lock: ${ctx.binding.lockPath}`] : []),
@@ -1129,7 +1168,7 @@ Rules:
 - A tap on a control that changes nothing is retried once 3 points off its centre, and the result says so.
 - tap and goal see the accessibility controls. When none has a label, or a view outside the app (Photos picker, permission sheet) covers the screen, they read the screenshot's text (OCR) instead. After every tap the screen before and after is compared, which is how a checkmark or switch is confirmed.`;
 
-const INSTRUCTIONS = `sim-eyes drives one leased iOS simulator per session_id. ${SESSION_ID_RULE}
+const INSTRUCTIONS = `sim-eyes drives one leased iOS simulator (or, with acquire platform:"android", one Android emulator) per session_id. ${SESSION_ID_RULE}
 
 First acquire or batch in a chat: omit session_id; the response begins with session_id=…. Every later call (batch, acquire, status, release) must pass that same session_id. Call release with session_id when QA ends.
 
@@ -1158,7 +1197,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: "acquire",
-      description: `Lease one simulator for this session_id via sim-pool (no UDID in mcp.json), or with target:\"device\" bind a connected physical iPhone/iPad (lock file per UDID; open reset:true is not available there; signing needs AGENT_DEVICE_IOS_TEAM_ID and AGENT_DEVICE_IOS_BUNDLE_ID in the MCP env). ${SESSION_ID_RULE} app is required (name or bundle id): the session attaches to that app without relaunching it. Optional prefer_udid / prefer_device on the tool args only: if sim-pool cannot grant that simulator the call fails and says why, it never hands you a different one silently. rebind:true switches simulators for this session_id.`,
+      description: `Lease one simulator for this session_id via sim-pool (no UDID in mcp.json), or with platform:\"android\" lease an Android emulator (sim-pool boots it headless; it can take a minute), or with target:\"device\" bind a connected physical iPhone/iPad (lock file per UDID; open reset:true is not available there; signing needs AGENT_DEVICE_IOS_TEAM_ID and AGENT_DEVICE_IOS_BUNDLE_ID in the MCP env). ${SESSION_ID_RULE} app is required (name or bundle id): the session attaches to that app without relaunching it. Optional prefer_udid / prefer_device on the tool args only: if sim-pool cannot grant that simulator the call fails and says why, it never hands you a different one silently. rebind:true switches simulators for this session_id.`,
       inputSchema: {
         type: "object",
         properties: {
@@ -1168,6 +1207,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             enum: ["simulator", "device"],
             description:
               "simulator (default): lease a simulator via sim-pool. device: drive a connected physical iPhone/iPad (trusted, unlocked, Developer Mode on; guarded by a lock file, DEVICE_BUSY when another session holds it). Never chosen by default.",
+          },
+          platform: {
+            type: "string",
+            enum: ["ios", "android"],
+            description:
+              "ios (default): an iOS simulator. android: an Android emulator leased through sim-pool (AVDs must exist; prefer_device is an AVD name, a busy AVD is cloned). Not combinable with target:device.",
           },
           prefer_udid: {
             type: "string",
@@ -1428,10 +1473,11 @@ async function handleToolCore(name, args) {
       preferUdid: args?.prefer_udid,
       preferDevice: args?.prefer_device,
       target: args?.target === "device" ? "device" : "simulator",
+      platform: normalizePlatform(args?.platform),
     };
     const rebind = args?.rebind === true;
     if (ctx.binding) {
-      if ((preferDiffersFromBinding(ctx.binding, prefer) || targetDiffersFromBinding(ctx.binding, prefer.target)) && !rebind) {
+      if ((preferDiffersFromBinding(ctx.binding, prefer) || targetDiffersFromBinding(ctx.binding, prefer.target) || platformDiffersFromBinding(ctx.binding, prefer.platform)) && !rebind) {
         return {
           content: [
             {
@@ -1463,7 +1509,7 @@ async function handleToolCore(name, args) {
     await acquireBinding(prefer);
     const asked = prefer.preferUdid || prefer.preferDevice;
     return toolResult(
-      `Acquired ${prefer.target} for this session_id.${asked ? `\npreference: honored (${asked})` : ""}\n${statusText()}\n\n${prefer.target === "device" ? "A device is held by a lock file: other session_ids get DEVICE_BUSY for it. Release when QA ends." : "Other session_ids get other free devices from sim-pool (or SIM_POOL_BUSY)."}`
+      `Acquired ${prefer.platform === "android" ? "Android emulator" : prefer.target} for this session_id.${asked ? `\npreference: honored (${asked})` : ""}\n${statusText()}\n\n${prefer.target === "device" ? "A device is held by a lock file: other session_ids get DEVICE_BUSY for it. Release when QA ends." : "Other session_ids get other free devices from sim-pool (or SIM_POOL_BUSY)."}`
     );
   }
 
