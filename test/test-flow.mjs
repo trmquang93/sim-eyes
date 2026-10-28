@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { fieldText, holdsText, focusPackage, namedOptions, needsChoice, valuesPending, wantsForward, choiceGroup, flowInstruction, flowTracker, isBackLike, isForward, MAX_BAD_DECISIONS, nextFill, optionsLeft, screenReport, typicalChoice, untilReached } from "../flow.mjs";
+import { focusPackage, namedOptions, needsChoice, valuesPending, wantsForward, choiceGroup, flowInstruction, flowTracker, isBackLike, isForward, MAX_BAD_DECISIONS, nextFill, optionsLeft, screenReport, typicalChoice, untilReached } from "../flow.mjs";
 
 const screen = { width: 400, height: 900 };
 const field = (label, y, value = "") => ({ n: 1, label, y, x: 200, editable: true, value });
@@ -101,22 +101,4 @@ assert.match(flowInstruction("walk the onboarding"), /walk the onboarding[\s\S]*
 assert.equal(focusPackage("  mCurrentFocus=Window{4f2 u0 com.ilamaster.pivoplay/vn.pivo.play.MainActivity}"), "com.ilamaster.pivoplay");
 assert.equal(focusPackage("  mCurrentFocus=Window{1a u0 com.google.android.gms/com.google.android.gms.auth.api.credentials.assistedsignin.ui.PhoneNumberHintActivity}"), "com.google.android.gms");
 assert.equal(focusPackage("mCurrentFocus=null"), null);
-
-// Why (a08 iOS): an empty field reports its placeholder as its value; "1992" as a placeholder must not count as the entry "1992".
-{
-  const empty = { label: "TextField", placeholder: "1992", value: "1992", editable: true, y: 615, x: 195 };
-  assert.equal(fieldText(empty), "", "a value equal to the placeholder is not content");
-  assert.equal(holdsText([empty], "1992"), false);
-  assert.equal(holdsText([{ ...empty, value: "1992" , placeholder: "1990" }], "1992"), true, "a real 1992 is content");
-  assert.equal(valuesPending(["1992"], new Set(), [empty]), 1, "the empty birth-year field still needs its entry");
-  assert.deepEqual(nextFill([empty], ["1992"]).text, "1992", "and it is typed");
-}
-
-// Why (a09-a11): values for a form must not block a screen that only has options.
-{
-  const optionsOnly = [btn("Never played", 200, 240), btn("Continue", 200, 800)];
-  assert.equal(valuesPending(["Tran Quang", "1995"], new Set(), optionsOnly), 0, "no field on screen: nothing to type here");
-  assert.equal(valuesPending(["Tran Quang"], new Set(), optionsOnly, { keyboard: true }), 1, "a keyboard may hide the field");
-  assert.equal(valuesPending(["Tran Quang"], new Set(), [field("full-name", 300)]), 1, "a field on screen with its entry untyped is pending");
-}
 console.log("test-flow: ok");

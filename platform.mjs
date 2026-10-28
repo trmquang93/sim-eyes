@@ -92,17 +92,3 @@ export function listAvds({ env, home, readdir }) {
   }
   return [];
 }
-
-/** The three global settings that scale Android's animations; 0 turns them off, so a screen is still as soon as the app has drawn it. */
-export const ANDROID_ANIMATION_KEYS = ["window_animation_scale", "transition_animation_scale", "animator_duration_scale"];
-
-/** The `settings get` reply for one key: a number, or null when the key is unset (the system default, 1.0). */
-export const parseAnimationScale = (output) => (/^\d+(\.\d+)?$/.test(String(output).trim()) ? String(output).trim() : null);
-
-/** One adb shell script that sets every animation key to `value`, or, given an object of saved values, puts each back (an unset key is deleted). */
-export function androidAnimationScript(valueOrSaved) {
-  return ANDROID_ANIMATION_KEYS.map((key) => {
-    const v = typeof valueOrSaved === "object" ? valueOrSaved[key] : valueOrSaved;
-    return v === null || v === undefined ? `settings delete global ${key}` : `settings put global ${key} ${v}`;
-  }).join("; ");
-}

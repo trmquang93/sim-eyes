@@ -25,7 +25,7 @@ import { TAP_FALLBACK_STEPS, helpRequest, notRunText, pausedReminder, stepFailed
 import { staleSimEyesSessions } from "./stale-sessions.mjs";
 import { acquireDeviceLock, DeviceBusyError, deviceLockHeldBy, releaseDeviceLock } from "./device-lock.mjs";
 import { isAnyUdid, isRunnerRestartFailure, needsDownscale, pickDevice, pngSize } from "./device-target.mjs";
-import { BACK_GOAL, backTargets, dragEnds, gestureNode, gridPlan, pinchPlan, tapCount, tapGoalNames, tapTarget } from "./act-direct.mjs";
+import { BACK_GOAL, backTargets, dragEnds, gestureNode, gridPlan, pinchPlan, tapCount, tapGoalNames, tapTarget, tapTargets } from "./act-direct.mjs";
 import { controlsLine, coveredControlsLine, coveredScreenLine, screenLine } from "./screen-summary.mjs";
 import { screenCover } from "./cover-check.mjs";
 import { needsOcr, ocrTargets, recognizeText, screenDiff } from "./ocr.mjs";
@@ -55,14 +55,15 @@ import {
   releaseLease,
   renewLease,
 } from "./pool.mjs";
+import { shouldRenew, needsSecondRead } from "./speed.mjs";
 import { adCommandFromHost } from "./ad-command.mjs";
 import { retryDaemonStartup } from "./ad-daemon.mjs";
 import { platformDiffersFromBinding, preferDiffersFromBinding, preferHonored, SESSION_ID_RULE, targetDiffersFromBinding } from "./binding-prefer.mjs";
 import { normalizeAndroidNodes } from "./android-tree.mjs";
-import { nativeCommands } from "./native.mjs";
-import { choiceGroup, controlKey, focusPackage, isBackLike, isForward, namedOptions, needsChoice, typicalChoice, holdsText, valuesPending, wantsForward, flowInstruction, flowTracker, nextFill, optionsLeft, screenReport, shouldDismissKeyboard, untilReached } from "./flow.mjs";
+import { nativeCommands, EXTRA_KEYS, BUTTONS } from "./native.mjs";
+import { choiceGroup, controlKey, focusPackage, isBackLike, isForward, namedOptions, needsChoice, typicalChoice, valuesPending, wantsForward, flowInstruction, flowTracker, nextFill, optionsLeft, screenReport, shouldDismissKeyboard, untilReached } from "./flow.mjs";
 import { launchCommands, stepSummary, takeoverHint, wantsImage, wantsStructure, withSavePath, needsShot as stepNeedsShot } from "./step-output.mjs";
-import { ANDROID_ANIMATION_KEYS, adTargetArgs, androidAnimationScript, androidResetArgs, normalizePlatform, parseAnimationScale, parseWmDensity, scaleAdArgs, screenshotArgs } from "./platform.mjs";
+import { adTargetArgs, androidResetArgs, normalizePlatform, parseWmDensity, scaleAdArgs, screenshotArgs } from "./platform.mjs";
 import {
   SessionRegistry,
   formatSessionPrefix,
@@ -73,18 +74,6 @@ const INSTANCE_ID = process.env.SIM_EYES_INSTANCE_ID || defaultInstanceId();
 const WORK_ROOT = join(homedir(), ".local", "sim-eyes", "work");
 const registry = new SessionRegistry();
 /** Active client session for the current MCP tool call (set in handleMcpTool). */
-// sim-pool starts emulators from the Android SDK; GUI-launched clients often have no ANDROID_SDK_ROOT, so use the default install.
-{
-  const sdk = join(homedir(), "Library/Android/sdk");
-  // A configured root with no system images (Homebrew's command-line tools) cannot boot an AVD: the Studio SDK that has them wins.
-  const bootable = (root) => root && existsSync(join(root, "system-images"));
-  const configured = process.env.ANDROID_SDK_ROOT || process.env.ANDROID_HOME;
-  if (existsSync(sdk) && (!configured || (!bootable(configured) && bootable(sdk)))) {
-    process.env.ANDROID_SDK_ROOT = sdk;
-    process.env.ANDROID_HOME = sdk;
-  }
-}
-
 let ctx = null;
 
 function workDir() {
@@ -195,34 +184,12 @@ async function unleasedEmulators() {
   return booted.filter((serial) => !pool.includes(serial));
 }
 
-/**
- * Turns Android's animations off for the session (a screen is then still as soon as the app has drawn it) and keeps the
- * emulator's own values to put back on release. SIM_EYES_ANIMATIONS=1 leaves them alone; a failure only costs the speed-up.
- */
-async function muteAndroidAnimations(binding) {
-  if (process.env.SIM_EYES_ANIMATIONS === "1") return;
-  try {
-    const saved = {};
-    for (const key of ANDROID_ANIMATION_KEYS) saved[key] = parseAnimationScale(await execCmd(adbBin(), ["-s", binding.udid, "shell", "settings", "get", "global", key]));
-    await execCmd(adbBin(), ["-s", binding.udid, "shell", androidAnimationScript(0)]);
-    binding.animations = saved;
-  } catch {
-    // Not fatal: animations stay as they are.
-  }
-}
-
-async function restoreAndroidAnimations(binding) {
-  if (!binding.animations) return;
-  await execCmd(adbBin(), ["-s", binding.udid, "shell", androidAnimationScript(binding.animations)]).catch(() => {});
-}
-
 /** Bind to an emulator that is already running, without a sim-pool lease (the caller started it and owns it). */
 async function bindExistingEmulator(serial) {
   const out = await execCmd(adbBin(), ["devices"]);
   if (!new RegExp(`^${serial}\\s+device$`, "m").test(out)) throw new Error(`serial ${serial} is not a booted emulator (adb devices does not list it as "device").`);
   ctx.binding = { leaseId: "", udid: serial, name: serial, expiresAt: "", session: `sim-eyes-${INSTANCE_ID}-${ctx.id}`, platform: "android", kind: "simulator" };
   ctx.binding.scale = parseWmDensity(await execCmd(adbBin(), ["-s", serial, "shell", "wm", "density"])) / 160;
-  await muteAndroidAnimations(ctx.binding);
 }
 
 async function acquireBinding({ preferUdid, preferDevice, target, platform, serial } = {}) {
@@ -264,7 +231,6 @@ async function acquireBinding({ preferUdid, preferDevice, target, platform, seri
     await requirePreferred(undefined, preferName);
     // One point is one dp: sim-eyes works in points, agent-device taps in pixels (see scaleAdArgs).
     ctx.binding.scale = parseWmDensity(await execCmd(adbBin(), ["-s", ctx.binding.udid, "shell", "wm", "density"])) / 160;
-    await muteAndroidAnimations(ctx.binding);
   } else if (target === "device") {
     ctx.binding = await acquireDeviceBinding({ udid: prefer, name: preferName });
   } else if (usePool()) {
@@ -379,7 +345,13 @@ async function ensureBound() {
     }
   } else if (ctx.binding.leaseId) {
     try {
-      await renewLease(ctx.binding.leaseId);
+      // A renew is a sim-pool process (~50 ms): once per interval, not once per device call.
+      if (shouldRenew(Date.now(), ctx.lastRenewAt, LEASE_TTL_MS)) {
+        const tRenew = Date.now();
+        await renewLease(ctx.binding.leaseId);
+        ctx.lastRenewAt = Date.now();
+        if (TIMING) console.error(`[timing] renew ${ctx.lastRenewAt - tRenew}ms`);
+      }
     } catch (err) {
       ctx.binding = null;
       throw new Error(
@@ -390,11 +362,24 @@ async function ensureBound() {
   return ctx.binding;
 }
 
+/** acquire show:true: open Simulator.app on the leased device so a person can watch (iOS simulators only). */
+async function showSimulatorWindow() {
+  const b = ctx.binding;
+  if (!b || b.platform === "android" || b.kind === "device") return "\nshow: ignored (only an iOS simulator has a window to open).";
+  try {
+    await execCmd("open", ["-a", "Simulator", "--args", "-CurrentDeviceUDID", b.udid]);
+    return `\nshow: opened Simulator on ${b.udid}.`;
+  } catch (err) {
+    return `\nshow: could not open Simulator (${String(err.message).slice(0, 80)}).`;
+  }
+}
+
 async function releaseBinding({ closeSession = true } = {}) {
   if (ctx.releasing || !ctx.binding) return;
   ctx.releasing = true;
   const current = ctx.binding;
   ctx.binding = null;
+  ctx.lastRenewAt = null;
   ctx.appReady = false;
   try {
     if (closeSession) {
@@ -408,7 +393,6 @@ async function releaseBinding({ closeSession = true } = {}) {
         { timeoutMs: 60000 }
       ).catch(() => {});
     }
-    await restoreAndroidAnimations(current);
     if (current.leaseId) await releaseLease(current.leaseId);
     if (current.lockPath) await releaseDeviceLock(current.lockPath, current.session);
   } finally {
@@ -420,44 +404,31 @@ const isUdid = isAnyUdid;
 
 /** Commands that cannot change what is on screen; everything else invalidates the cached snapshot and screenshot. */
 const READ_ONLY_AD = new Set(["snapshot", "screenshot"]);
+/** Pseudo commands only native input can run. */
+const NATIVE_ONLY_AD = new Set(["press_many", "button", "open_url", "key"]);
 
 const TIMING = !!process.env.SIM_EYES_TIMING;
+const LEASE_TTL_MS = (Number(process.env.SIM_EYES_LEASE_TTL) || 900) * 1000;
 
 /**
  * A short adaptive settle after native input. iOS: screenshots (0.2 s each) until two in a row match, at most 4, and the
  * last one is the step's screenshot. Android: a screenshot costs 1.5 s, so a fixed 300 ms.
  */
 async function shotHash() {
-  // The screenshot a settle just took is still the screen when no input has gone out since: no second 0.2 s capture.
-  if (ctx.shot?.takenAt > (ctx.lastInputAt ?? 0) && ctx.shot.takenAt > Date.now() - 3000) return createHash("md5").update(await readFile(ctx.shot.path)).digest("hex");
   return createHash("md5").update(await readFile((await currentShot("probe")).path)).digest("hex");
 }
 
-/**
- * After native input on iOS: screenshots (0.2 s each, the first after 120 ms) until two in a row match, at most 4, the
- * last one being the step's screenshot. Returns whether the screen differs from `before` (a hash), so the same
- * screenshots that settle the screen also tell whether the input reached it.
- */
-async function nativeSettle(b, before = null) {
-  if (b.platform === "android") {
-    await sleep(300);
-    return true;
-  }
+async function nativeSettle(b) {
+  if (b.platform === "android") return void (await sleep(300));
   await sleep(120);
   let prev = null;
-  let changed = before === null;
   for (let i = 0; i < 4; i++) {
     ctx.version += 1;
     const shot = await currentShot("settle");
     const hash = createHash("md5").update(await readFile(shot.path)).digest("hex");
-    if (TIMING) console.error(`[timing] settle shot ${i} ${hash.slice(0, 6)} before=${before?.slice(0, 6)}`);
-    if (hash !== before) changed = true;
-    // The `run` loop reads the tree itself: it only needs to know the input landed, not that the screen stopped moving.
-    if (ctx.skipSettle && (changed || i >= 1)) break;
-    if (hash === prev) break;
+    if (hash === prev) return;
     prev = hash;
   }
-  return changed;
 }
 
 async function runAd(args, opts) {
@@ -465,51 +436,49 @@ async function runAd(args, opts) {
   if (!READ_ONLY_AD.has(args[0])) ctx.version += 1;
   const argv = [...scaleAdArgs(args, b.scale), "--session", b.session, ...adTargetArgs(b.platform, b.udid)];
   const t0 = Date.now();
-  // An iOS simulator tap goes through agent-device's open runner without --settle (0.5 s; axe re-bootstraps accessibility on every call, 0.75 s), then the pixel settle below decides when the screen is still.
-  if (b.platform !== "android" && b.kind !== "device" && args[0] === "press" && !args.includes("--double-tap") && !process.env.SIM_EYES_AXE_PRESS) {
-    const bare = args.filter((a, i) => !(a === "--settle" || a === "--settle-quiet" || args[i - 1] === "--settle-quiet"));
-    const before = await shotHash();
-    await spawnAd([...scaleAdArgs(bare, b.scale), "--session", b.session, ...adTargetArgs(b.platform, b.udid)], opts);
-    ctx.lastInputAt = Date.now();
-    await nativeSettle(b, before);
-    if (TIMING) console.error(`[timing] ad-bare press ${Date.now() - t0}ms`);
-    return "";
-  }
   // Exact input goes straight to axe / adb; agent-device stays the fallback and runs everything else.
   if (!process.env.SIM_EYES_NO_NATIVE && !ctx.nativeDead) {
     const native = nativeCommands(b, args, { adb: adbBin() });
     if (native) {
       // axe sends HID events the simulator can silently drop (the Mac's display asleep, a wedged HID service). On iOS a tap or fill that changed no pixel is sent once more through agent-device; if that one changes the screen, native input is dead for this session.
-      const check = b.platform !== "android" && (args[0] === "press" || args[0] === "fill");
+      // Trusted input (the default) has no before/after screenshots and no settle: the next step reads the tree and retries on a miss.
+      // Only the first press or fill of a session is checked, to catch a simulator that silently drops axe input.
+      const check = b.platform !== "android" && (args[0] === "press" || args[0] === "fill") && (!ctx.noCheck || !ctx.nativeVerified);
+      if (check) ctx.nativeVerified = true;
       try {
         const before = check ? await shotHash() : null;
-        const tExec = Date.now();
-        for (const c of native) { const o = await execCmd(c.cmd, c.args); if (TIMING) console.error(`[timing] ${c.cmd} ${c.args.join(" ")} => ${String(o).replace(/\s+/g, " ").slice(0, 160)}`); }
-        ctx.lastInputAt = Date.now();
-        if (TIMING) console.error(`[timing] native exec ${args[0]} before=${tExec - t0}ms exec=${Date.now() - tExec}ms`);
-        // A skipped settle (the `run` loop reads the tree itself) still waits for the first change when the input is checked.
-        const changed = ctx.skipSettle && !check ? true : await nativeSettle(b, before);
-        if (check && !changed) {
-          // Two inputs in a row that changed no pixel, and then agent-device's changes it: native input is dead for this session.
-          ctx.nativeMisses = (ctx.nativeMisses ?? 0) + 1;
-          await spawnAd(argv, opts).catch(() => {});
+        for (const c of native) await execCmd(c.cmd, c.args);
+        if (check) {
+          await sleep(300);
           ctx.version += 1;
-          ctx.lastInputAt = Date.now();
-          if ((await shotHash()) !== before && ctx.nativeMisses >= 2) {
-            ctx.nativeDead = true;
-            if (TIMING) console.error("[timing] native input did not reach the simulator; agent-device from now on");
+          let after = await shotHash();
+          // A push animation or a slow first render can leave the frame unchanged for 300 ms; look once more before calling native input dead.
+          if (after === before) {
+            await sleep(600);
+            ctx.version += 1;
+            after = await shotHash();
           }
-          return "";
+          if (after === before) {
+            await spawnAd(argv, opts).catch(() => {});
+            ctx.version += 1;
+            if ((await shotHash()) !== before) {
+              ctx.nativeDead = true;
+              if (TIMING) console.error("[timing] native input did not reach the simulator; agent-device from now on");
+            }
+            return "";
+          }
         }
-        if (check) ctx.nativeMisses = 0;
+        ctx.lastInputAt = Date.now();
+        if (!ctx.skipSettle && !ctx.noCheck) await nativeSettle(b);
         if (TIMING) console.error(`[timing] native ${args[0]} ${Date.now() - t0}ms`);
         return "";
       } catch (err) {
+        // These have no agent-device command to fall back to: say what the system said.
+        if (NATIVE_ONLY_AD.has(args[0])) throw new Error(`${args[0]} failed: ${String(err.message).trim().slice(0, 300)}`);
         if (TIMING) console.error(`[timing] native ${args[0]} failed (${String(err.message).slice(0, 80)}), agent-device runs it`);
       }
     }
   }
-  if (!READ_ONLY_AD.has(args[0])) ctx.lastInputAt = Date.now();
   try {
     return await spawnAd(argv, opts);
   } catch (err) {
@@ -521,6 +490,7 @@ async function runAd(args, opts) {
     await sleep(1500);
     return "";
   } finally {
+    if (!READ_ONLY_AD.has(args[0])) ctx.lastInputAt = Date.now();
     if (TIMING) console.error(`[timing] ad ${args[0]} ${Date.now() - t0}ms`);
   }
 }
@@ -608,7 +578,7 @@ async function currentShot(tag = "screen") {
   if (ctx.binding?.kind === "device") await deviceShot(path);
   else if (ctx.binding?.platform === "android") await androidShot(path);
   else if (!(await axeShot(path))) await runAd(screenshotArgs(ctx.binding?.platform, path));
-  ctx.shot = { path, version: ctx.version, takenAt: Date.now() };
+  ctx.shot = { path, version: ctx.version };
   return ctx.shot;
 }
 
@@ -748,6 +718,15 @@ async function fillVerified(target, text) {
   }
 }
 
+/** A step that only axe / simctl / adb can do: an error that says so, instead of an agent-device command that does not exist. */
+async function nativeOnly(args, what) {
+  const b = await ensureBound();
+  if (process.env.SIM_EYES_NO_NATIVE || ctx.nativeDead || !nativeCommands(b, args, { adb: adbBin() })) {
+    throw new Error(`${what} needs native input on a simulator or emulator (not a real device, and not after native input was found dead).`);
+  }
+  await runAd(args);
+}
+
 async function pressKey(key) {
   if (key === "return") {
     await runAd(["keyboard", "enter"]);
@@ -764,7 +743,11 @@ async function pressKey(key) {
     }
     return "Dismissed keyboard";
   }
-  throw new Error('press key must be "return" or "dismiss"');
+  if (EXTRA_KEYS.includes(key) || key === "home") {
+    await nativeOnly(["key", key], `key ${key}`);
+    return `Pressed ${key}`;
+  }
+  throw new Error(`key must be "return", "dismiss" or one of ${EXTRA_KEYS.join(", ")}`);
 }
 
 function swipeCoords(direction) {
@@ -962,7 +945,7 @@ async function longPressStep(args) {
 /** A tap by code, no model call (`what` names the step in the result). Done only if the screen visibly changed. */
 async function directTapStep(what, target) {
   if (ctx.noCheck) {
-    // check:false: the tap is sent and trusted. No screenshots, so about 0.4 s on Android instead of 3 s.
+    // Default (check not true): the tap is sent and trusted. No screenshots.
     await pressPoint(target);
     return { outcome: "done", landed: true, summary: `${what}: done, tapped ${JSON.stringify(target.label)} (not checked).` };
   }
@@ -1145,6 +1128,25 @@ async function tapAtStep(args, double = false) {
   return directTapStep(`${double ? "double_tap" : "tap_at"} (${x}, ${y})`, double ? { ...target, double: true } : target);
 }
 
+/**
+ * The `tap_seq` step: several labels on one screen from ONE tree read, sent in one input process. The cost of one tap
+ * instead of N; the layout must not shift between the taps (a keyboard rising, a row expanding), and a miss in the
+ * middle is not seen. `check:true` verifies the screen after the last tap only.
+ */
+async function tapSeqStep(args) {
+  const targets = await withFreshTree(({ targets, nodes }) => tapTargets({ labels: args.labels, nth: args.nth }, targets, nodes));
+  const what = `tap_seq ${targets.map((t) => quoted(t.label)).join(", ")}`;
+  const coords = targets.flatMap((t) => [t.x, t.y]);
+  const native = !process.env.SIM_EYES_NO_NATIVE && !ctx.nativeDead && ctx.binding && nativeCommands(ctx.binding, ["press_many", ...coords], { adb: adbBin() });
+  const before = ctx.noCheck ? null : await currentShot("act-before");
+  if (native) await runAd(["press_many", ...coords]);
+  else for (const t of targets) await pressPoint(t);
+  const last = targets.at(-1);
+  if (ctx.noCheck) return { outcome: "done", landed: true, summary: `${what}: done, ${targets.length} taps (not checked).` };
+  const effect = await measureTap(last, before);
+  return tapResult(what, last, effect, effectText(effect));
+}
+
 /** The `tap_at` step: one tap, or a double tap with count 2. Any other count is refused, never ignored. */
 const tapAtCountStep = (args) => tapAtStep(args, tapCount(args, "tap_at") === 2);
 
@@ -1152,8 +1154,7 @@ const tapAtCountStep = (args) => tapAtStep(args, tapCount(args, "tap_at") === 2)
 async function doubleTapStep(args) {
   tapCount(args, "double_tap");
   if (args.label == null) return tapAtStep(args, true);
-  const { targets, nodes } = await tappable();
-  const target = tapTarget({ label: args.label, nth: args.nth }, targets, nodes);
+  const target = await withFreshTree(({ targets, nodes }) => tapTarget({ label: args.label, nth: args.nth }, targets, nodes));
   return directTapStep(`double_tap ${quoted(target.label)}`, { ...target, double: true });
 }
 
@@ -1169,16 +1170,60 @@ async function tapGridStep(args) {
 }
 
 /** What a step may tap right now: the tree's controls, or the screenshot's text when a view outside the app covers the screen. */
-async function tappable() {
+/** `cover:false` skips the screenshot + OCR check for a view outside the app's tree (Photos picker, permission sheet): the accessibility tree alone. */
+async function tappable({ cover: checkCover = true } = {}) {
   await snapshotTargets();
+  if (!checkCover) return { targets: ctx.lastTargets, nodes: ctx.lastNodes };
   const cover = await coverOf();
   return cover.hidden ? { targets: ocrTargets(cover.items), nodes: [] } : { targets: ctx.lastTargets, nodes: ctx.lastNodes };
 }
 
 /** The exact tap: the control or text with this exact label. */
+/** How long (ms) a step waits before it reads the tree again when its target is not there yet (a screen still arriving). */
+const MISS_RETRY_DELAYS = [0, 150, 350, 700];
+/** An input this recent may still be moving the screen (a keyboard hiding, a push): the tree is read until two reads agree. */
+const treeSig = ({ targets }) => targets.map((t) => `${t.label}|${Math.round(t.x)}|${Math.round(t.y)}`).join(";");
+
+/** The tree, read again until two reads in a row place every control alike. Reads once when no input is recent. */
+async function stableTree({ cover = false } = {}) {
+  let tree = await tappable({ cover });
+  if (!needsSecondRead({ sinceInputMs: Date.now() - (ctx.lastInputAt ?? 0) })) return tree;
+  let sig = treeSig(tree);
+  for (let i = 1; i <= 5; i++) {
+    await sleep(Math.min(100 * i, 400));
+    ctx.version += 1;
+    tree = await tappable({ cover });
+    const now = treeSig(tree);
+    if (now === sig) return tree;
+    sig = now;
+  }
+  return tree;
+}
+const isMiss = (err) => /No visible control or text labelled/.test(String(err?.message));
+
+/**
+ * Inputs are not followed by a screenshot or a wait. The next step reads the accessibility tree right away; when its
+ * target is not in the tree yet the tree is read again after a short pause, and only then does the step fail.
+ */
+async function withFreshTree(find) {
+  let lastErr;
+  for (const delay of MISS_RETRY_DELAYS) {
+    if (lastErr) {
+      if (delay) await sleep(delay);
+      ctx.version += 1;
+    }
+    try {
+      return await find(await stableTree({ cover: !!lastErr }));
+    } catch (err) {
+      if (!isMiss(err)) throw err;
+      lastErr = err;
+    }
+  }
+  throw lastErr;
+}
+
 async function tapExact(args) {
-  const { targets, nodes } = await tappable();
-  const target = tapTarget({ label: args.label, nth: args.nth }, targets, nodes);
+  const target = await withFreshTree(({ targets, nodes }) => tapTarget({ label: args.label, nth: args.nth }, targets, nodes));
   return directTapStep(`tap ${quoted(target.label)}`, target);
 }
 
@@ -1257,7 +1302,7 @@ async function typeStep(args) {
     if (args.submit === true) await pressKey("return");
     return { outcome: "done", landed: true, summary: `type: done, entered ${String(args.text).length} character(s) at (${args.x}, ${args.y})${args.submit === true ? " and pressed return" : ""}.` };
   }
-  const { targets } = await tappable();
+  const { targets } = await stableTree();
   const fields = targets.filter((t) => t.editable);
   const into = args.into == null ? null : String(args.into).trim().toLowerCase();
   // A focused field can be missing from the tree while the keyboard is up: the text then goes to whatever has focus.
@@ -1268,6 +1313,15 @@ async function typeStep(args) {
   }
   const matches = (list) => (into == null ? list : list.filter((f) => [f.label, f.placeholder, f.value, f.identifier].some((v) => v && String(v).trim().toLowerCase() === into)));
   let named = matches(fields);
+  // The field may not be in the tree yet (the screen is still arriving): read the tree again before moving anything.
+  for (const delay of MISS_RETRY_DELAYS.slice(1)) {
+    if (named.length > 0 || into == null) break;
+    await sleep(delay);
+    ctx.version += 1;
+    const again = await tappable();
+    fields.splice(0, fields.length, ...again.targets.filter((t) => t.editable));
+    named = matches(fields);
+  }
   // The field may be under the keyboard or scrolled out of view: hide the keyboard, then scroll once, and read again.
   for (let attempt = 0; named.length === 0 && into != null && attempt < 2; attempt++) {
     if (attempt === 0 && (await keyboardUp())) await dismissKeyboard(ctx.lastTargets);
@@ -1295,6 +1349,25 @@ async function keyStep(args) {
   return { outcome: "done", landed: true, summary: `key: done, ${(await pressKey(args.key)).toLowerCase()}.` };
 }
 
+/** The `button` step: a hardware button (home, lock, siri, side_button, apple_pay on iOS; home, lock on Android). */
+async function buttonStep(args) {
+  const name = String(args.name ?? "").toLowerCase();
+  if (!BUTTONS.includes(name)) throw new Error(`button needs name: one of ${BUTTONS.join(", ")}.`);
+  await nativeOnly(["button", name], `button ${name}`);
+  ctx.version += 1;
+  return { outcome: "done", landed: true, summary: `button: done, pressed ${name}.` };
+}
+
+/** The `open_url` step: a deep link or web URL, opened by the system. */
+async function openUrlStep(args) {
+  const url = String(args.url ?? "").trim();
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(url)) throw new Error('open_url needs url with a scheme, e.g. {"tool":"open_url","url":"myapp://home"}.');
+  await nativeOnly(["open_url", url], "open_url");
+  await sleep(clampMs(args.wait_ms, 800, 0, 10000));
+  ctx.version += 1;
+  return { outcome: "done", landed: true, summary: `open_url: done, opened ${url}.` };
+}
+
 async function waitStep(args) {
   const ms = clampMs(args.ms, 700, 0, 10000);
   await sleep(ms);
@@ -1303,13 +1376,21 @@ async function waitStep(args) {
 }
 
 async function lookStep() {
-  await snapshotTargets();
-  return { outcome: "done", landed: true, summary: "look: done." };
+  await stableTree(); // an input just before it may still be moving the screen
+  const size = ctx.screenSize ? ` Screen ${Math.round(ctx.screenSize.width)}x${Math.round(ctx.screenSize.height)} pt.` : "";
+  return { outcome: "done", landed: true, summary: `look: done.${size}` };
 }
 
 /** The `launch` step: start an app with launch arguments (iOS) or intent extras (Android) inside the batch, instead of a simctl / adb call outside it. */
 async function launchStep(args) {
   const b = await ensureBound();
+  if (args.app_path) {
+    if (b.platform === "android" || b.kind === "device") throw new Error("launch app_path installs an .app on an iOS simulator. For Android use adb install, for a phone use your build tooling.");
+    const appPath = String(args.app_path);
+    if (!args.id) args = { ...args, id: (await execCmd("plutil", ["-extract", "CFBundleIdentifier", "raw", "-o", "-", join(appPath, "Info.plist")])).trim() };
+    await execCmd("xcrun", ["simctl", "terminate", b.udid, String(args.id)]).catch(() => {});
+    await execCmd("xcrun", ["simctl", "install", b.udid, appPath], 180000);
+  }
   const { id, list, commands } = launchCommands(b, args, adbBin());
   for (const c of commands) await execCmd(c.cmd, c.args).catch((err) => { if (!c.optional) throw err; });
   ctx.version += 1;
@@ -1317,14 +1398,36 @@ async function launchStep(args) {
   ctx.appReady = false; // the next read re-attaches agent-device to the new process (open without relaunch, about 0.4 s)
   await sleep(clampMs(args.wait_ms, 800, 0, 10000)); // the first frame
   ctx.version += 1;
-  if (b.platform === "android") await ensureForeground().catch(() => {}); // the app's window takes focus a moment after the intent
+  // A freshly started app can still be restoring its screen; the next input would be dropped. Read until two reads agree.
+  ctx.lastInputAt = Date.now();
+  if (b.platform !== "android") await stableTree().catch(() => {});
   return { outcome: "done", landed: true, summary: `launch: done, started ${id}${list.length ? ` with ${list.join(" ")}` : ""}.` };
 }
 
 /** The `screenshot` step: the only step that returns an image (reportScreen attaches it). */
-async function screenshotStep() {
-  await snapshotTargets();
-  return { outcome: "done", landed: true, summary: "screenshot: done." };
+async function screenshotStep(args = {}) {
+  const afterMs = args.after_ms == null ? 0 : clampMs(args.after_ms, 0, 0, 10000);
+  const burst = args.burst && typeof args.burst === "object" ? args.burst : null;
+  if (!afterMs && !burst) {
+    await snapshotTargets();
+    return { outcome: "done", landed: true, summary: "screenshot: done." };
+  }
+  // Timed capture: no tree read, so the frame is taken at the moment asked (mid-transition included).
+  if (afterMs) await sleep(afterMs);
+  const count = burst ? Math.min(Math.max(Math.round(Number(burst.count) || 1), 1), 10) : 1;
+  const every = burst ? clampMs(burst.every_ms, 150, 0, 5000) : 0;
+  const dir = workDir();
+  await mkdir(dir, { recursive: true });
+  const base = typeof args.save === "string" && args.save ? args.save.replace(/\.png$/i, "") : join(dir, `frames-${Date.now()}`);
+  const files = [];
+  for (let i = 1; i <= count; i++) {
+    if (i > 1) await sleep(every);
+    ctx.version += 1;
+    const shot = await currentShot("frame");
+    const dest = count > 1 || typeof args.save !== "string" ? `${base}-${i}.png` : `${base}.png`;
+    files.push(await saveShot(shot.path, dest));
+  }
+  return { outcome: "done", landed: true, summary: `screenshot: done, ${files.length} frame(s) saved: ${files.join(", ")}.` };
 }
 
 /** The `goal` step: reach an end state with the model-driven loop. */
@@ -1338,8 +1441,6 @@ async function goalStep(args) {
 
 /** Read the tree once the screen has stopped moving: iOS reads again until two reads match (0.25 s each); Android reads once (1.8 s a read), twice when the tree came back empty. */
 async function readSettled() {
-  // Let the transition start before the first read (the loop used to sleep 200 ms, then read twice).
-  if (ctx.lastInputAt && ctx.binding?.platform !== "android") await sleep(Math.max(0, 450 - (Date.now() - ctx.lastInputAt) - 250));
   ctx.version += 1;
   let targets = await snapshotTargets();
   if (ctx.binding?.platform === "android") {
@@ -1350,8 +1451,6 @@ async function readSettled() {
     }
     return targets;
   }
-  // The tree settles with the transition: a read taken 450 ms or more after the last native input needs no second read to confirm it.
-  if (Date.now() - (ctx.lastInputAt ?? 0) >= 450 && targets.length > 0) return targets;
   for (let i = 0; i < 3; i++) {
     const before = treeSignature();
     await sleep(150);
@@ -1362,58 +1461,14 @@ async function readSettled() {
   return targets;
 }
 
-const appPackage = () => (/^[A-Za-z][\w]*(\.[\w]+)+$/.test(String(ctx.app ?? "")) ? ctx.app : null);
-
-/** Android: the package that has window focus (null while the app's window is not focused yet), and whether the input method really shows a keyboard. */
-async function androidState() {
-  const out = await execCmd(adbBin(), ["-s", ctx.binding.udid, "shell", "dumpsys window | grep mCurrentFocus; dumpsys input_method | grep -E 'mInputShown|mImeWindowVis'"], 10000).catch(() => "");
-  return {
-    focus: focusPackage(/mCurrentFocus=.*/.exec(out)?.[0] ?? ""),
-    // mInputShown alone goes stale (it stays true after the app is gone), and BACK with no keyboard leaves the app: all three must agree.
-    ime: /mInputShown=true/.test(out) && /mImeWindowVis=(?!0\b)\d+/.test(out),
-  };
-}
-
-/** Android: the top edge of the visible keyboard in pixels (null when none is shown). A field below it is covered, and a tap there lands on the keyboard (Gboard's toolbar opened a Translate dialog). */
-async function androidImeTop() {
-  const out = await execCmd(adbBin(), ["-s", ctx.binding.udid, "shell", "dumpsys window | grep 'type=ime'"], 10000).catch(() => "");
-  const m = /type=ime frame=\[\d+,(\d+)\]\[\d+,\d+\][^\n]*visible=true/.exec(out);
-  return m ? Number(m[1]) : null;
-}
-
-/**
- * Whether the soft keyboard is up: iOS lists its keys in the tree; on Android its keys are not in the tree, so the
- * input method says, and only counts while the app under test has window focus.
- */
+/** Whether the soft keyboard is up: iOS lists its keys in the tree; on Android its keys are not in the tree, so the input method says (0.3 s). */
 async function keyboardUp() {
   if (ctx.binding?.platform !== "android") return keyboardShown(ctx.lastNodes);
-  const { focus, ime } = await androidState();
-  const app = appPackage();
-  return ime && (!app || focus === app);
-}
-
-/**
- * Android: the app under test must be in front before a step acts. Waits for its window to take focus (right after a
- * launch there is none), closes the notification shade, and brings the app back from the launcher once. Throws when it cannot.
- */
-async function ensureForeground() {
-  const app = appPackage();
-  if (!app || ctx.binding?.platform !== "android") return;
-  const sh = (cmd) => execCmd(adbBin(), ["-s", ctx.binding.udid, "shell", cmd]).catch(() => "");
-  let away = "";
-  for (let attempt = 0; attempt < 6; attempt++) {
-    const { focus } = await androidState();
-    if (focus === app) return;
-    away = focus ?? "no focused window";
-    if (focus == null) await sleep(500);
-    else {
-      if (focus === "com.android.systemui") await sh("cmd statusbar collapse");
-      await sh(`monkey -p ${app} -c android.intent.category.LAUNCHER 1`);
-      await sleep(900);
-    }
-    ctx.version += 1;
+  try {
+    return /mInputShown=true/.test(await execCmd(adbBin(), ["-s", ctx.binding.udid, "shell", "dumpsys input_method | grep -o 'mInputShown=[a-z]*'"]));
+  } catch {
+    return false;
   }
-  throw new Error(`${app} is not in the foreground (${away}). The step was not sent. Relaunch it with a launch step, or take over.`);
 }
 
 /** Hide the keyboard: tap its Done key when the tree lists one, else the keyboard's own dismiss. */
@@ -1455,43 +1510,31 @@ async function runFlowStep(args) {
   let choiceMade = false; // an option was picked on this page
   let lastChoice = null; // the option picked on this page and its group, to pick again when the tap did not register
   const retried = new Set();
-  let lastFill = null;
   let forwardWaits = 0; // re-reads while the forward button is not enabled yet
   let reveals = 0; // tries to bring a hidden field into view
   let awayFixes = 0; // times the app was brought back to the foreground
   let pending = null; // the action whose effect the next read shows
   const appId = /^[A-Za-z][\w]*(\.[\w]+)+$/.test(String(ctx.app ?? "")) ? ctx.app : null;
   const nameOf = () => JSON.stringify(ctx.lastScreen?.title || ctx.lastScreen?.texts?.[0] || "screen");
-  const closeScreen = async () => {
-    await finishPageShot();
+  const closeScreen = () => {
     if (cur) report.push(screenReport(report.length + 1, cur.context, cur.actions));
     cur = null;
   };
   const result = async (outcome, head) => {
-    if (shotsDir) {
-      const last = (await currentShot("run-final")).path;
-      await saveShot(last, join(shotsDir, "final.png")).catch(() => {});
-      if (cur && !cur.left) await saveShot(last, join(shotsDir, `${String(report.length + 1).padStart(2, "0")}.png`)).catch(() => {});
-    }
+    if (shotsDir) await saveShot((await currentShot("run-final")).path, join(shotsDir, "final.png")).catch(() => {});
     const lines = [`run: ${head}`, ...report];
     if (cur) lines.push(screenReport(report.length + 1, cur.context, cur.actions));
     if (outcome !== "done") lines.push(`   ${screenLine(ctx.lastScreen)}`, `   ${controlsLine(ctx.lastTargets)}`);
     return { outcome, landed: outcome === "done", summary: lines.join("\n") };
   };
   const stuck = (why) => result("stopped", `stuck on ${nameOf()}: ${why}`);
-  /** Pictures per executed screen or page: NN-start.png when it appeared, NN.png as it was left (a filled form), named like its line in the result. */
-  const saveScreenShot = async (path, suffix = "") => {
-    if (!shotsDir) return null;
+  /** One picture per executed screen or page, named like its line in the result. */
+  const saveScreenShot = async (path) => {
+    if (!shotsDir) return;
     const shot = path ? { path } : await currentShot("run");
-    await saveShot(shot.path, join(shotsDir, `${String(report.length + 1).padStart(2, "0")}${suffix}.png`));
-    return shot.path;
+    await saveShot(shot.path, join(shotsDir, `${String(report.length + 1).padStart(2, "0")}.png`));
   };
-  /** A page left without a forward tap still gets its NN.png (its start picture). */
-  const finishPageShot = async () => {
-    if (shotsDir && cur?.start && !cur.left) await saveShot(cur.start, join(shotsDir, `${String(report.length + 1).padStart(2, "0")}.png`));
-  };
-  const noPending = (keyboard = false) => valuesPending(values, usedTexts, ctx.lastTargets, { keyboard }) === 0;
-  let keyboardDismissed = false;
+  const noPending = () => valuesPending(values, usedTexts, ctx.lastTargets) === 0;
   ctx.skipSettle = true;
   try {
     let targets = await snapshotTargets();
@@ -1499,11 +1542,16 @@ async function runFlowStep(args) {
       if (acted >= TOTAL_ACTIONS || Date.now() > deadline) return stuck(`the run is long (${acted} action(s)); send the rest as a new run.`);
       if (onPage >= pageBudget) return stuck(`${onPage} actions on this screen without leaving it (max_steps ${pageBudget} per screen).`);
       if (i > 0) targets = await readSettled();
-      // The app must stay in front: a stray tap or key can leave it (Android shows the launcher, the shade or a Google sheet).
-      try {
-        await ensureForeground();
-      } catch (err) {
-        return stuck(err.message);
+      // The app must stay in front: a dismissed keyboard or a stray tap can leave it (Android shows the launcher or a Google sheet).
+      if (appId && ctx.binding?.platform === "android") {
+        const focus = focusPackage(await execCmd(adbBin(), ["-s", ctx.binding.udid, "shell", "dumpsys window | grep mCurrentFocus"]).catch(() => ""));
+        if (focus && focus !== appId) {
+          if (awayFixes >= 2) return stuck(`the foreground app is ${focus}, not ${appId}.`);
+          awayFixes += 1;
+          await execCmd(adbBin(), ["-s", ctx.binding.udid, "shell", awayFixes === 1 ? "input keyevent 4" : `monkey -p ${appId} -c android.intent.category.LAUNCHER 1`]).catch(() => {});
+          await sleep(600);
+          continue;
+        }
       }
       const keyboard = await keyboardUp();
       const sigNow = treeSignature();
@@ -1531,43 +1579,27 @@ async function runFlowStep(args) {
         pending.record.effect = { screenChanged: changed, changedAtControl: changed };
         pending = null;
       }
-      // The last fill did not land (an empty field still shows its placeholder): let it be typed again, once.
-      if (lastFill && !holdsText(targets, lastFill.text) && targets.some((t) => t.editable)) usedTexts.delete(lastFill.text);
-      lastFill = null;
       // Fields: code fills them from `values`, one per iteration, in the order they appear.
       const fieldKey = (f) => controlKey("field", { label: "", x: 0, y: Math.round(f.y / 40) });
-      const fill = nextFill(targets, values, { used: usedTexts, skip: (f) => tracker.used(`${fieldKey(f)}#2`) });
-      // A field the keyboard covers cannot be tapped: close the keyboard first (the field is read again at its real place).
-      if (fill && keyboard && !keyboardDismissed && ctx.binding?.platform === "android") {
-        const imeTop = await androidImeTop();
-        if (imeTop && fill.field.y * ctx.binding.scale >= imeTop) {
-          keyboardDismissed = true;
-          await dismissKeyboard(targets);
-          continue;
-        }
-      }
+      const fill = nextFill(targets, values, { used: usedTexts, skip: (f) => tracker.used(fieldKey(f)) });
       if (fill) {
         if (!cur) cur = { key: "", context: ctx.lastScreen, actions: [] };
-        tracker.use(tracker.used(fieldKey(fill.field)) ? `${fieldKey(fill.field)}#2` : fieldKey(fill.field));
+        tracker.use(fieldKey(fill.field));
         usedTexts.add(fill.text);
-        lastFill = { text: fill.text };
         await fillVerified(fill.field, fill.text);
-        keyboardDismissed = false;
         acted += 1;
         onPage += 1;
         cur.actions.push(`filled ${JSON.stringify(fill.field.placeholder || fill.field.label)}`);
         continue;
       }
-      // Android's input method can report "shown" after it closed; a second BACK would leave the app, so one dismiss per fill.
-      if (!keyboardDismissed && shouldDismissKeyboard({ keyboard, pendingFill: false })) {
-        keyboardDismissed = true;
+      if (shouldDismissKeyboard({ keyboard, pendingFill: false })) {
         await dismissKeyboard(targets);
-        reveals += keyboard && !noPending(true) ? 1 : 0;
+        reveals += keyboard && !noPending() ? 1 : 0;
         if (reveals > 3) return stuck(`a field for the remaining values is not on screen.`);
         continue;
       }
       // A value is still to be typed but its field is not listed: it is scrolled out of view. Scroll once or twice, then stop (never "done").
-      if (!noPending(keyboard)) {
+      if (!noPending()) {
         if (reveals >= 3) return stuck(`no field found for the remaining value(s) (hidden or off screen); typing them needs a manual step.`);
         reveals += 1;
         const [x1, y1, x2, y2] = swipeCoords("down");
@@ -1578,15 +1610,15 @@ async function runFlowStep(args) {
       // A new screen: close the last one's line, save its picture when asked.
       const key = JSON.stringify([ctx.lastScreen?.title, ctx.lastScreen?.texts?.slice(0, 8)]);
       if (!cur || (cur.key && cur.key !== key)) {
-        await closeScreen();
+        closeScreen();
         cur = { key, context: ctx.lastScreen, actions: [] };
         onPage = 0;
         choiceMade = false;
         forwardWaits = 0;
-        cur.start = await saveScreenShot(undefined, "-start");
+        await saveScreenShot();
       } else if (!cur.key) {
         cur.key = key;
-        cur.start = await saveScreenShot(undefined, "-start");
+        await saveScreenShot();
       }
       if (tracker.visit(key) > 12) return stuck(`the same screen again after ${acted} action(s).`);
       if (untilReached(until, ctx.lastScreen, targets)) return result("done", `done after ${acted} action(s): "${until}" is on screen.`);
@@ -1607,7 +1639,7 @@ async function runFlowStep(args) {
       const namedLeft0 = namedOptions(task, targets.filter((t) => !t.editable && !isForward(t, ctx.screenSize))).length > 0;
       if (TIMING) console.error(`[timing] run options ${options.map((t) => t.label).join(" | ")} choiceMade=${choiceMade}`);
       const forwardNow = options.find((t) => isForward(t, ctx.screenSize));
-      if (named.length > 0) {
+      if (named.length > 0 && !choiceMade) {
         // The task names this option: tap it directly, no model.
         step = { key: `named ${named[0].label}`, confidence: 1, action: { kind: "tap", target: named[0] } };
       } else if (forwardNow && !needsChoice(choices, choiceMade) && (namedLeft0 || choiceMade || choices.length === 0) && wantsForward(task)) {
@@ -1648,15 +1680,11 @@ async function runFlowStep(args) {
         else choiceMade = namedOptions(task, group).every((t) => tracker.used(controlKey(key, t)));
       }
       pending = { sig: sigNow, record, forward, before: forward ? await currentShot("run-before") : null };
-      if (forward && shotsDir) {
-        await saveScreenShot(pending.before.path);
-        cur.left = true;
-      }
       await runActAction(step.action);
       acted += 1;
       onPage += 1;
       cur.actions.push(step.action.kind === "tap" ? `tap ${JSON.stringify(target.label)}` : step.action.kind);
-      if (ctx.binding?.platform === "android") await sleep(350);
+      await sleep(ctx.binding?.platform === "android" ? 350 : 200);
     }
   } finally {
     ctx.skipSettle = false;
@@ -1669,6 +1697,7 @@ const RUN_CONFIDENCE_MIN = 0.25;
 /** Steps that drive the screen, each carried out by code except `goal` and `run`. */
 const SCREEN_STEPS = {
   tap: tapStep,
+  tap_seq: tapSeqStep,
   tap_at: tapAtCountStep,
   double_tap: doubleTapStep,
   tap_grid: tapGridStep,
@@ -1683,6 +1712,8 @@ const SCREEN_STEPS = {
   wait: waitStep,
   look: lookStep,
   screenshot: screenshotStep,
+  button: buttonStep,
+  open_url: openUrlStep,
   goal: goalStep,
   run: runFlowStep,
   launch: launchStep,
@@ -1734,6 +1765,7 @@ const STEP_TABLE = `Each step is { "tool": <step>, ...args }.
 | step | Use when | Arguments |
 | --- | --- | --- |
 | tap | You know the control's exact label (also a list row's exact title) | label (exact, case aside; a near match is never taken); nth (1-based, top to bottom; only when several controls share the label on screen) |
+| tap_seq | Several controls on ONE screen whose layout does not shift between them (a PIN pad, a row of options): one tree read, one input process | labels (array of exact labels, in tap order). A keyboard rising or a row expanding between taps breaks it; use tap steps then |
 | tap_at | A point no control names: an unlabeled control, a photo in the Photos picker, outside a popup menu to dismiss it | x, y (points) |
 | double_tap | A double tap in one fast device call | label or x, y; nth as tap |
 | tap_grid | Many cells of a grid in one step (select 50 photos). Row by row from the first cell; cells that toggle are tapped once each | x, y (centre of the first cell); dx, dy (distance between cells); cols, rows; count (optional) |
@@ -1742,24 +1774,26 @@ const STEP_TABLE = `Each step is { "tool": <step>, ...args }.
 | swipe | A raw swipe (pan a map, pull, edge swipe) | from {x,y}, to {x,y} |
 | pinch | Zoom a picture, map or page | scale (above 1 zooms in; 0.2–5); x, y (optional centre) |
 | type | Enter text in a field (replaces what it holds) | text (verbatim); into (label or placeholder; optional when one field is on screen) or x, y (the field's point, skips reading the screen); submit:true presses return |
-| key | The keyboard | key: "return" or "dismiss" |
+| key | The keyboard | key: "return", "dismiss", or an editing key (left, right, up, down, home, end, page_up, page_down, delete, forward_delete, select_all, undo, redo) |
 | drag | Reorder or move an item | from, to (a visible label or {x,y}); hold_ms (default 600) |
 | long_press | Hold an element | label or x, y; hold_ms (default 800) |
 | wait | A transition, alert or loading screen | ms (default 700, max 10000) |
 | look | Debug only: the screen's title, texts and control labels | none |
-| screenshot | See the screen: returns an image | save or path (optional file to keep it) |
+| screenshot | See the screen: returns an image. Timed: catch a transition | save or path (optional file to keep it); after_ms (wait, then capture without reading the tree); burst {count (max 10), every_ms}: numbered frames saved, last one returned |
+| button | A hardware button | name: home, lock, siri, side_button, apple_pay (Android: home, lock) |
+| open_url | A deep link or web URL | url (with scheme) |
 | run | A whole flow, screen after screen, on its own in one call: fills fields from values, picks options, taps forward; stops as "stuck on <screen>" with a takeover line | task (the flow in plain language); values (field text, a list in field order or {label: text}); until (text that proves done); max_steps (default 40); shots (folder for a picture per screen). Needs TYPESAFE_API_KEY |
 | goal | The route is not known: reach an end state | goal (the end state); max_steps (default ${ACT_DEFAULT_STEPS}, max ${ACT_MAX_STEPS}; 8–25 for a multi-action goal); text (the only text goal may type). Needs TYPESAFE_API_KEY |
-| launch | Start an app with launch arguments, inside the batch (not a simctl / adb call outside it) | id (bundle id / package id); args (list: iOS launch arguments such as ["-UseFake","1"]; Android am extras such as ["--es","UseFake","1"], which also need activity); activity (Android, e.g. "vn.x.MainActivity"); terminate:false keeps a running copy |
+| launch | Start an app with launch arguments, inside the batch (not a simctl / adb call outside it) | id (bundle id / package id); args (list: iOS launch arguments such as ["-UseFake","1"]; Android am extras such as ["--es","UseFake","1"], which also need activity); activity (Android, e.g. "vn.x.MainActivity"); terminate:false keeps a running copy; app_path (iOS simulator: path of a built .app, installed first; id is read from its Info.plist when absent) |
 | open | Launch or restart the app | name (default: the batch app); relaunch:true restarts it; reset:true wipes its data first (bundle id required) |
 | record | Capture video | action: start or stop; stop returns a contact sheet, plus frames (0–6, default 0) |
 
-Any step also takes: save or path (write the screenshot to this file, no image in the reply), controls:true (this step also lists controls with positions), wait_ms (pause first, max 10000), check:false (a tap is sent and trusted, no screenshots: fast on Android, for taps you know land), quick:true (a tap does not wait for the UI to go quiet, about 2 s faster; not for pickers or permission sheets).
+Any step also takes: save or path (write the screenshot to this file, no image in the reply), controls:true (this step also lists controls with positions), wait_ms (pause first, max 10000), check:true (verify this tap or type with before/after screenshots; by default input is sent and trusted, with no screenshots and no wait: the next step reads the accessibility tree and re-reads it on a miss before it fails), quick:true (a tap does not wait for the UI to go quiet, about 2 s faster; not for pickers or permission sheets).
 `;
 
 const DRIVE_RULES = `HOW TO DRIVE. ONE call per flow, never one tap per call (every call is an agent turn).
 1. Start with run: {"tool":"run","task":"walk the onboarding to the rating result screen, filling plausible values","values":["Tran Minh Quang","Quang","1992"],"until":"Go to Home","shots":"/abs/dir"}. It works screen by screen on its own: fills fields from values, picks options, taps forward, hides the keyboard, and returns one line per screen. Needs TYPESAFE_API_KEY. Give until (text on the last screen) and max_steps for long flows. Put launch before it in the same batch: {"tool":"launch","id":"com.x","args":["-UseFake","1"]}.
-2. Exact steps (tap, type, tap_at, scroll, key, screenshot) in the same batch when you know the labels or points; check:false on taps you trust. Use goal only for a small stretch with unknown labels.
+2. Exact steps (tap, type, tap_at, scroll, key, screenshot) in the same batch when you know the labels or points; Use goal only for a small stretch with unknown labels.
 Never call simctl or adb outside a batch, and do not use look to find labels: run reads the screens itself.
 
 REPLIES ARE TEXT ONLY, one line per step ("done", "acted but not confirmed", "stopped", "stuck", or the failure reason). You get an image only from a screenshot step (or image:true on the batch), and the screen's title, texts and control labels only from a look step (or controls:true on a step). Ask for them when you need them, not by habit.
@@ -1839,6 +1873,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: "string",
             description: APP_DESCRIPTION,
           },
+          show: {
+            type: "boolean",
+            description: "Open Simulator.app on the leased iOS simulator so a person can watch the run live. Ignored on Android and real devices.",
+          },
           rebind: {
             type: "boolean",
             description:
@@ -1915,7 +1953,7 @@ Response: one text line per step. A failed step ends the batch with its reason, 
                 tool: {
                   type: "string",
                   enum: [...STEP_TOOLS],
-                  description: "The step: tap, tap_at, double_tap, tap_grid, back, scroll, swipe, pinch, type, key, drag, long_press, wait, look, screenshot, goal, run, launch, open or record. See the table in the batch description.",
+                  description: "The step: tap, tap_seq, tap_at, double_tap, tap_grid, back, scroll, swipe, pinch, type, key, drag, long_press, wait, look, screenshot, button, open_url, goal, run, launch, open or record. See the table in the batch description.",
                 },
                 id: { type: "string", description: "launch: bundle id (iOS) or package id (Android)." },
                 args: { type: "array", items: { type: "string" }, description: "launch: iOS launch arguments, or Android `am start` extras." },
@@ -1923,13 +1961,14 @@ Response: one text line per step. A failed step ends the batch with its reason, 
                 task: { type: "string", description: "run: the whole flow in plain language, e.g. \"walk the onboarding to the rating result screen\"." },
                 until: { type: "string", description: "run: text that proves the flow is done (a title, text or button on the final screen)." },
                 shots: { type: "string", description: "run: absolute folder; a picture of every new screen is saved there (01.png, 02.png...), none in the reply." },
-                check: { type: "boolean", description: "tap, tap_at: false sends the tap without checking that the screen changed (no screenshots)." },
+                check: { type: "boolean", description: "tap, tap_seq, tap_at, type: true verifies the input with before/after screenshots and a settle wait. Default: sent and trusted, no screenshots; the next step reads the accessibility tree." },
                 terminate: { type: "boolean", description: "launch: false keeps a running copy (default: stop it first)." },
                 label: {
                   type: "string",
                   description: "tap, double_tap: the exact label of the control or text to tap. long_press: the label of the element to hold.",
                 },
-                nth: { type: "number", description: "tap: which of several controls that share this label ON SCREEN RIGHT NOW (1-based, top to bottom, then left to right). Only when the error listed several; it does not count repeated taps in the batch." },
+                labels: { type: "array", items: { type: "string" }, description: "tap_seq: exact labels of 2 or more controls on the current screen, tapped in this order from one tree read." },
+                nth: { type: ["number", "array"], items: { type: "number" }, description: "tap_seq: an array, one entry per label (null where the label is unique). tap: which of several controls that share this label ON SCREEN RIGHT NOW (1-based, top to bottom, then left to right). Only when the error listed several; it does not count repeated taps in the batch." },
                 x: { type: "number", description: "double_tap, tap_at, long_press: horizontal position of the point, in points. pinch: optional centre. tap_grid: centre of the first cell." },
                 y: { type: "number", description: "double_tap, tap_at, long_press: vertical position of the point, in points. pinch: optional centre. tap_grid: centre of the first cell." },
                 dx: { type: "number", description: "tap_grid: distance between cell centres across, in points (needed when cols > 1)." },
@@ -1946,7 +1985,11 @@ Response: one text line per step. A failed step ends the batch with its reason, 
                 text: { type: "string", description: "type: the exact text to enter. goal: the only text the goal may type into a field (goal never invents text)." },
                 into: { type: "string", description: "type: label or placeholder of the field to fill; optional when only one field is on screen." },
                 submit: { type: "boolean", description: "type: press return after entering the text." },
-                key: { type: "string", enum: ["return", "dismiss"], description: "key: the keyboard return key, or hide the keyboard." },
+                key: { type: "string", enum: ["return", "dismiss", ...EXTRA_KEYS], description: "key: the keyboard return key, hide the keyboard, or an editing key." },
+                url: { type: "string", description: "open_url: the URL or deep link, with its scheme." },
+                after_ms: { type: "number", description: "screenshot: wait this long, then capture without reading the tree (0–10000)." },
+                burst: { type: "object", properties: { count: { type: "number" }, every_ms: { type: "number" } }, description: "screenshot: capture count frames (max 10) every_ms apart, saved as numbered files." },
+                app_path: { type: "string", description: "launch: path of a built .app to install on the iOS simulator before launching." },
                 ms: { type: "number", description: "wait: how long to wait (default 700, max 10000)." },
                 goal: { type: "string", description: "goal: the end state to reach, in plain language (an outcome on the screen, not a tap)." },
                 values: {
@@ -1970,7 +2013,7 @@ Response: one text line per step. A failed step ends the batch with its reason, 
                   type: "boolean",
                   description: "Any step: list every control with its position after the step (default: control labels only).",
                 },
-                name: { type: "string", description: "open: app display name or bundle identifier (default: the batch app)." },
+                name: { type: "string", description: "open: app display name or bundle identifier (default: the batch app). button: home, lock, siri, side_button, apple_pay." },
                 relaunch: {
                   type: "boolean",
                   description: "open: true terminates the app first and starts it fresh (default false: keep a running app).",
@@ -2138,9 +2181,10 @@ async function handleToolCore(name, args) {
       }
     }
     await acquireBinding(prefer);
+    const shown = args?.show === true ? await showSimulatorWindow() : "";
     const asked = prefer.preferUdid || prefer.preferDevice;
     return toolResult(
-      `Acquired ${prefer.platform === "android" ? "Android emulator" : prefer.target} for this session_id.${asked ? `\npreference: honored (${asked})` : ""}\n${statusText()}\n\n${prefer.target === "device" ? "A device is held by a lock file: other session_ids get DEVICE_BUSY for it. Release when QA ends." : "Other session_ids get other free devices from sim-pool (or SIM_POOL_BUSY)."}`
+      `Acquired ${prefer.platform === "android" ? "Android emulator" : prefer.target} for this session_id.${asked ? `\npreference: honored (${asked})` : ""}${shown}\n${statusText()}\n\n${prefer.target === "device" ? "A device is held by a lock file: other session_ids get DEVICE_BUSY for it. Release when QA ends." : "Other session_ids get other free devices from sim-pool (or SIM_POOL_BUSY)."}`
     );
   }
 
@@ -2168,7 +2212,7 @@ async function reportScreen({ summary, failed = false, outcome }, args, { tool, 
   const picture = wantsImage(tool, last, image);
   // The tree and the cover check (a screenshot plus OCR) are read only for a reply that shows the screen; the next step reads what it needs.
   const describe = structure || failed;
-  if (describe) await snapshotTargets();
+  if (describe) await stableTree();
   const cover = describe ? await coverOf() : { hidden: false, texts: [] };
   const shot = wantShot ? await currentShot("look") : null;
   const saved = args.save && shot ? await saveShot(shot.path, args.save) : null;
@@ -2189,17 +2233,14 @@ async function runStep(tool, args, flags) {
   const screenStep = SCREEN_STEPS[tool];
   if (screenStep) {
     ctx.quickTap = args.quick === true;
-    ctx.noCheck = args.check === false;
-    // A step must not act on the launcher or the notification shade: the first step of a batch, `type` and `screenshot` check the app is in front.
-    if ((flags.first || tool === "type" || tool === "screenshot") && !["launch", "wait", "run"].includes(tool)) {
-      await ensureBound();
-      await ensureForeground();
-    }
+    ctx.noCheck = args.check !== true;
     if (args.wait_ms != null && tool !== "wait") {
       await sleep(clampMs(args.wait_ms, 0, 0, 10000));
       ctx.version += 1;
     }
+    const tStep = Date.now();
     const result = await screenStep(args);
+    if (TIMING) console.error(`[timing] ${tool} body ${Date.now() - tStep}ms`);
     const screen = await reportScreen({ summary: result.summary, failed: stepFailed(result), outcome: result.outcome }, args, { ...flags, tool });
     return { ...screen, needsHelp: result.needsHelp === true };
   }
@@ -2279,7 +2320,7 @@ async function runBatch(actions, { image = false, continueOnFail = false, start 
   let pausedHere = false;
   for (const [i, action] of actions.entries()) {
     const { tool, ...args } = action;
-    const flags = { last: i === actions.length - 1, image, first: i === 0 && !resumed };
+    const flags = { last: i === actions.length - 1, image };
     const stepStart = Date.now();
     try {
       result = await runStep(tool, args, flags);

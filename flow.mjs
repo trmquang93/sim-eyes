@@ -20,17 +20,11 @@ export const flowInstruction = (task) => `${String(task).trim()}\n\n${FLOW_POLIC
  * an object (by label or placeholder) or a list (entries in field order, each used once). `skip(field)` is true for a
  * field the run already tried. Null when nothing is left to fill.
  */
-/** What a field holds: its value, or its label when the platform shows the text there (Android). Placeholder text is not content: iOS reports an empty field's placeholder as its value. */
-export function fieldText(f) {
-  const value = String(f.value ?? "");
-  if (value && value === String(f.placeholder ?? "")) return "";
-  return value || String(f.label ?? "");
-}
-
 export function nextFill(targets, values, { used = new Set(), skip = () => false } = {}) {
   if (!values) return null;
   const fields = targets.filter((t) => t.editable).sort((a, b) => a.y - b.y);
-  const textOf = fieldText;
+  // A field's text is its value, or its label when the platform shows the text there (Android).
+  const textOf = (f) => String(f.value || f.label || "");
   const same = (a, b) => {
     const x = a.trim().toLowerCase();
     const y = b.trim().toLowerCase();
@@ -170,11 +164,9 @@ export function namedOptions(task, options) {
  * How many of the caller's `values` are still to be typed: entries not typed yet and not held by any field on screen.
  * The run is not done while this is above zero (a field slid under the keyboard, Continue stayed disabled).
  */
-export function valuesPending(values, usedTexts, targets, { keyboard = false } = {}) {
+export function valuesPending(values, usedTexts, targets) {
   if (!values) return 0;
-  // A screen with no field (and no keyboard that may hide one) has nothing to type: entries meant for other screens do not block it.
-  if (!keyboard && !targets.some((t) => t.editable)) return 0;
-  const held = targets.filter((t) => t.editable).map((t) => norm(fieldText(t)));
+  const held = targets.filter((t) => t.editable).map((t) => norm(t.value || t.label));
   const entries = Array.isArray(values) ? values.map(String) : Object.values(values).map(String);
   return entries.filter((v) => !usedTexts.has(v) && !held.some((h) => h && (h === norm(v) || h.startsWith(norm(v))))).length;
 }
@@ -185,13 +177,4 @@ export const needsChoice = (choices, choiceMade) => choices.length > 0 && !choic
 /** The package of an Android focus line such as "mCurrentFocus=Window{... u0 com.x/com.x.MainActivity}"; null when none. */
 export function focusPackage(line) {
   return /\s([A-Za-z][\w.]*)\/[\w.$]+\}?/.exec(String(line))?.[1] ?? null;
-}
-
-/** Whether some editable field on screen holds `text` (case aside, a prefix counts: the keyboard may append a suggestion). Placeholders are not content. */
-export function holdsText(targets, text) {
-  const want = norm(text);
-  return targets.filter((t) => t.editable).some((t) => {
-    const have = norm(fieldText(t));
-    return !!have && (have === want || have.startsWith(want) || want.startsWith(have));
-  });
 }

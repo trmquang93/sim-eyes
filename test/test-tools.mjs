@@ -42,7 +42,7 @@ try {
   const batch = tools.find((t) => t.name === "batch");
   assert.match(batch.description, /\| step \| Use when \|/);
   // Every screen step is a row of the table, and agents are told what a "not confirmed" result means.
-  for (const name of ["tap", "tap_at", "double_tap", "tap_grid", "back", "scroll", "swipe", "pinch", "type", "key", "drag", "long_press", "wait", "look", "screenshot", "goal", "run", "launch", "open", "record"]) {
+  for (const name of ["tap", "tap_seq", "tap_at", "double_tap", "tap_grid", "back", "scroll", "swipe", "pinch", "type", "key", "drag", "long_press", "wait", "look", "screenshot", "button", "open_url", "goal", "run", "launch", "open", "record"]) {
     assert.match(batch.description, new RegExp(`\\| ${name} \\|`), name);
   }
   assert.match(init.result.instructions, /acted but not confirmed/);
@@ -66,8 +66,8 @@ try {
   assert.equal(batch.inputSchema.properties.image.type, "boolean");
   assert.equal(batch.inputSchema.properties.continue_on_fail.type, "boolean");
   const step = batch.inputSchema.properties.actions.items.properties;
-  assert.deepEqual(step.tool.enum, ["tap", "tap_at", "double_tap", "tap_grid", "back", "scroll", "swipe", "pinch", "type", "key", "drag", "long_press", "wait", "look", "screenshot", "goal", "run", "launch", "open", "record"]);
-  for (const field of ["label", "nth", "x", "y", "dx", "dy", "cols", "rows", "count", "direction", "times", "from", "to", "hold_ms", "text", "into", "submit", "key", "ms", "goal", "max_steps", "wait_ms", "quick", "controls", "reset", "relaunch", "frames", "save", "path", "id", "args", "activity", "terminate", "check", "task", "until", "shots"]) {
+  assert.deepEqual(step.tool.enum, ["tap", "tap_seq", "tap_at", "double_tap", "tap_grid", "back", "scroll", "swipe", "pinch", "type", "key", "drag", "long_press", "wait", "look", "screenshot", "button", "open_url", "goal", "run", "launch", "open", "record"]);
+  for (const field of ["label", "labels", "url", "after_ms", "burst", "app_path", "nth", "x", "y", "dx", "dy", "cols", "rows", "count", "direction", "times", "from", "to", "hold_ms", "text", "into", "submit", "key", "ms", "goal", "max_steps", "wait_ms", "quick", "controls", "reset", "relaunch", "frames", "save", "path", "id", "args", "activity", "terminate", "check", "task", "until", "shots"]) {
     assert.ok(step[field], field);
   }
   assert.ok(!step.instruction && !step.drag && !step.long_press, "the act fields are gone");
