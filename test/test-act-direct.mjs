@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { BACK_GOAL, backTargets, dragEnds, gestureNode, gridPlan, pinchPlan, tapCount, tapGoalNames, tapTarget } from "../act-direct.mjs";
+import { BACK_GOAL, backTargets, dragEnds, gestureNode, gridPlan, pinchPlan, tapCount, tapGoalNames, tapTarget, tapTargets } from "../act-direct.mjs";
 import { controlsLine, screenLine } from "../screen-summary.mjs";
 import { listTargets, screenContext } from "../targets.mjs";
 
@@ -171,3 +171,14 @@ assert.equal(tapCount({ count: 2 }, "double_tap"), 2);
 assert.throws(() => tapCount({ count: 3 }, "tap_at"), /tap_at count must be 1 or 2.*tap_grid/);
 assert.throws(() => tapCount({ count: "x" }, "tap_at"), /count must be 1 or 2/);
 assert.throws(() => tapCount({ count: 1 }, "double_tap"), /always two taps/);
+
+// tap_seq: all labels come from one tree; the error names the label that is missing or shared.
+{
+  const mk = (label, x, y) => ({ label, x, y });
+  const tree = [mk("1", 50, 100), mk("2", 100, 100), mk("3", 150, 100), mk("Next", 100, 300), mk("3", 150, 200)];
+  assert.deepEqual(tapTargets({ labels: ["1", "2", "Next"] }, tree).map((t) => t.label), ["1", "2", "Next"]);
+  assert.throws(() => tapTargets({ labels: ["1", "Missing"] }, tree), /tap_seq label 2 of 2: No visible control or text labelled "Missing"/);
+  assert.throws(() => tapTargets({ labels: ["1", "3"] }, tree), /label 2 of 2: 2 controls are labelled "3"/, "an ambiguous label is refused without its nth");
+  assert.deepEqual(tapTargets({ labels: ["1", "3"], nth: [undefined, 2] }, tree).map((t) => t.y), [100, 200]);
+  assert.throws(() => tapTargets({ labels: ["1"] }, tree), /needs labels/, "one label is a plain tap");
+}

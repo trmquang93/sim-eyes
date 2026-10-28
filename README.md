@@ -77,7 +77,7 @@ If the pool is busy → tool returns `SIM_POOL_BUSY` → mark QA **inconclusive*
 
 sim-pool is found in this order: `SIM_POOL_BIN`, the skill under `~/.claude`, `~/.agents` or `~/.cursor` (`skills/sim-pool/scripts/sim-pool`), then the copy in the package.
 
-An agent drives the simulator through one tool, `batch`, which takes an array of **steps**: exact steps carried out by code (`tap`, `tap_at`, `double_tap`, `tap_grid`, `back`, `scroll`, `swipe`, `pinch`, `type`, `key`, `drag`, `long_press`, `wait`, `look`), one model-driven step (`goal`), and `open` / `record`. There are no separate tap, swipe, type, look or wait tools. **Queue whole flows:** set the end state of the flow, split it into stretches and send them all in one call of 5–20 steps instead of one or two per call. Each extra call costs an agent turn on top of 1.5–4 s per step on the simulator; a batch stops at its first failed step, so long batches are safe. A batch of one or two driving steps gets a reminder appended. **Exact steps where you know the label, a goal where you do not:** `tap` takes an exact label; `goal` takes the end state of a stretch ("open the About screen under General", `max_steps` 12) and keeps tapping, scrolling and backing out until the screen confirms it. The old `act` step is retired; calling it returns an error that says what to send.
+An agent drives the simulator through one tool, `batch`, which takes an array of **steps**: exact steps carried out by code (`tap`, `tap_seq`, `tap_at`, `double_tap`, `tap_grid`, `back`, `scroll`, `swipe`, `pinch`, `type`, `key`, `drag`, `long_press`, `wait`, `look`, `button`, `open_url`), one model-driven step (`goal`), and `open` / `record`. There are no separate tap, swipe, type, look or wait tools. **Queue whole flows:** set the end state of the flow, split it into stretches and send them all in one call of 5–20 steps instead of one or two per call. Each extra call costs an agent turn on top of 1.5–4 s per step on the simulator; a batch stops at its first failed step, so long batches are safe. A batch of one or two driving steps gets a reminder appended. **Exact steps where you know the label, a goal where you do not:** `tap` takes an exact label; `goal` takes the end state of a stretch ("open the About screen under General", `max_steps` 12) and keeps tapping, scrolling and backing out until the screen confirms it. The old `act` step is retired; calling it returns an error that says what to send.
 
 ```json
 { "app": "com.example.app", "actions": [{ "tool": "tap", "label": "Files" }, { "tool": "goal", "goal": "open the Move picker for Sample.pdf", "max_steps": 12 }, { "tool": "drag", "from": "1", "to": "5" }, { "tool": "tap", "label": "Save", "save": "/abs/path/saved.png" }] }
@@ -88,6 +88,7 @@ Batch arguments: `app` (required), `actions`, `image` (attach the final screensh
 | Step `tool` | Arguments |
 | --- | --- |
 | `tap` | `label` (exact, case aside; a control, or a list row's exact title; a near match is never taken), `nth` (1-based, top to bottom then left to right, when several share the label; without it a shared label is an error that lists them) |
+| `tap_seq` | `labels` (array, two or more exact labels on the current screen, in tap order): one tree read and one input process for all of them (about 1 s for three taps instead of 4+ s). The layout must not shift between the taps (keyboard, expanding row) and a miss in the middle is not seen; an ambiguous label needs `nth` as an array. `check:true` verifies the screen after the last tap |
 | `tap_at` | `x`, `y` (points): tap that exact point and report whether the screen changed. For a control with no label, a photo in the Photos picker, or the area outside a popup menu (which dismisses it). `count: 2` makes it a double tap; any other `count` is refused |
 | `double_tap` | `label` (exact, as `tap`) or `x`, `y` (points, as `tap_at`); `nth` as `tap`: a double tap with both touches sent in one fast device call, because two `tap` steps are seconds apart and never form one (iOS wants the second within about 0.3 s). No goal fallback |
 | `tap_grid` | `x`, `y` (centre of the first cell), `dx`, `dy` (distance between cell centres), `cols`, `rows`, optional `count`: tap a whole grid in one step, row by row, with one screen check after the last tap. For selecting many photos in the Photos picker or ticking a column of checkboxes. Cells toggle, so aim at cells on screen that are not yet selected |
@@ -96,12 +97,16 @@ Batch arguments: `app` (required), `actions`, `image` (attach the final screensh
 | `swipe` | `from` `{x, y}`, `to` `{x, y}` |
 | `pinch` | `scale` (above 1 zooms in, below 1 zooms out; 0.2–5), optional `x`, `y` centre |
 | `type` | `text` (verbatim), `into` (label or placeholder of the field; optional when one field is on screen), `submit` (press return) |
-| `key` | `key`: `return` or `dismiss` |
+| `key` | `key`: `return`, `dismiss`, or an editing key: `left`, `right`, `up`, `down`, `home`, `end`, `page_up`, `page_down`, `delete`, `forward_delete`, `select_all`, `undo`, `redo` (simulator and emulator only) |
+| `button` | `name`: `home`, `lock`, `siri`, `side_button`, `apple_pay` (Android: `home`, `lock`) |
+| `open_url` | `url` (with scheme): a deep link or web URL opened by the system (`xcrun simctl openurl` / `am start`); the tree of the app under test is read next, so a URL that leaves the app shows that app's last screen |
+| `screenshot` | optional `after_ms` (wait, then capture with no tree read: catches a transition) and `burst` `{count (max 10), every_ms}` (numbered frames saved next to `save`, the last one returned) |
 | `drag` | `from`, `to` (a visible label such as a page number or row title, or a point), `hold_ms` (default 600) |
 | `long_press` | `label` or `x`, `y`; `hold_ms` (default 800) |
 | `wait` | `ms` (default 700, max 10000) |
 | `look` | reports the screen (every step already does) |
 | `goal` | `goal` (the end state), `max_steps` (default 5, max 25; 8–25 for a multi-action goal), `text` (the only text it may type). Needs `TYPESAFE_API_KEY` |
+| `launch` | `id`, `args`, `activity` (Android), `terminate`; `app_path` (iOS simulator): install a built `.app` first and read the bundle id from its `Info.plist` when `id` is absent |
 | `open` | `name` (default: the batch app); `relaunch: true` restarts it; `reset: true` reinstalls it from its own bundle so its data, preferences and first-launch state are fresh (needs the bundle id) |
 | `record` | `action`: `start` or `stop`; stop returns a contact sheet, plus `frames` (0–6, default 0) |
 

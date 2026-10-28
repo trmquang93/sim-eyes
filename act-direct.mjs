@@ -86,6 +86,21 @@ export function tapTarget({ label, nth } = {}, targets, nodes = []) {
   return found[0];
 }
 
+/**
+ * Every label of a `tap_seq` resolved against one tree: the targets in order, or an error that names the label that is
+ * missing or shared (an ambiguous label needs its `nth`, given at the same index).
+ */
+export function tapTargets({ labels, nth } = {}, targets, nodes = []) {
+  if (!Array.isArray(labels) || labels.length < 2) throw new Error('tap_seq needs labels: an array of two or more exact labels on the current screen, e.g. {"tool":"tap_seq","labels":["1","2","3"]}. For one tap use tap.');
+  return labels.map((label, i) => {
+    try {
+      return tapTarget({ label, nth: Array.isArray(nth) ? nth[i] : undefined }, targets, nodes);
+    } catch (err) {
+      throw new Error(`tap_seq label ${i + 1} of ${labels.length}: ${err.message}`);
+    }
+  });
+}
+
 /** How many taps a `tap_at` / `double_tap` step makes: 1 or 2 (`double_tap` is always 2). Any other `count` is refused, never ignored. */
 export function tapCount(args, tool) {
   const wanted = tool === "double_tap" ? 2 : 1;
